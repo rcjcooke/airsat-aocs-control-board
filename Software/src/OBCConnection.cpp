@@ -98,12 +98,23 @@ void OBCConnection::handleInterrupt() {
           uint16_t calculated = calculateFletcher16((const uint8_t*)&_incomingFrame, 24);
           
           if (calculated == _incomingFrame.checksum) {
-            // Use memcpy to safely cast volatile data into non-volatile workspace
-            memcpy(&_verifiedCommand, (const void*)&_incomingFrame.payload, sizeof(CommandPayload));
-            _newCommandReady = true;
+            // Inspect index tracking flag byte
+            if (_incomingFrame.payload.flags == 0x22) {
+              // Telemetry Poll Only: Return fresh telemetry to Pi but skip updating actuators
+            } 
+            else if (_incomingFrame.payload.flags == 0x11) {
+              // Valid Command: Copy data across volatile barrier into the main workspace
+              memcpy(&_verifiedCommand, (const void*)&_incomingFrame.payload, sizeof(CommandPayload));
+              _newCommandReady = true;
+            } 
+            else {
+              // Catch-all safety gate: Malformed or uninitialized flags result in a discarded frame
+              _localErrorCount++;
+            }
           } else {
             _localErrorCount++;
           }
+
           _frameSynced = false;
           _rxIndex = 0;
           updateTxBuffer(); // Ensure error counts are updated immediately on structural changes

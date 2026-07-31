@@ -4,20 +4,20 @@
 #include <Arduino.h>
 
 #pragma pack(push, 1)
-// Raw structural payloads
 struct CommandPayload {
   float torque;
   float thrust[4];
+  uint8_t flags;         
+  uint8_t alignment_pad;  
 };
 
 struct TelemetryPayload {
   float momentum;
   uint16_t propellant;
   uint16_t error_count;
-  uint8_t padding[14]; // Explicitly pads payload to 22 bytes
+  uint8_t padding[14]; // Balanced to pad the payload size to exactly 22 bytes
 };
 
-// Full 26-byte Wire Frames
 struct CommandFrame {
   uint8_t sync[2]; // [0] = 0xAA, [1] = 0x55
   CommandPayload payload;
