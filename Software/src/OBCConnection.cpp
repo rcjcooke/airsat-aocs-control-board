@@ -1,65 +1,24 @@
 #include "OBCConnection.h"
-#include <SPISlave_T4.h>
+#include <SPISlave_T4.h> // Library stays strictly here
 
-// Instantiate the underlying hardware driver for standard SPI port (Pins 10-13)
+// Instantiate the driver and buffers all in the same compilation translation unit
 static SPISlave_T4<&SPI, SPI_8_BITS> hardwareSPI;
-OBCConnection* g_obcConnectionPtr = nullptr;
 
-// Global wrapper function because SPISlave_T4 demands a non-member function pointer for callbacks
-void globalSPIISRWrapper() {
-  if (g_obcConnectionPtr != nullptr) {
-    g_obcConnectionPtr->handleInterrupt();
-  }
-}
+static volatile CommandFrame   _incomingFrame;
+static volatile TelemetryFrame _outgoingFrame;
 
-OBCConnection::OBCConnection() 
-  : _newCommandReady(false), _rxIndex(0), _frameSynced(false), _localErrorCount(0) {
-  _rxPtr = (uint8_t*)&_incomingFrame;
-  _txPtr = (uint8_t*)&_outgoingFrame;
-  
-  // Pre-seed frames with sync codes
-  _outgoingFrame.sync[0] = 0xAA;
-  _outgoingFrame.sync[1] = 0x55;
-  memset((void*)&_outgoingFrame.payload, 0, sizeof(TelemetryPayload));
-}
+static CommandPayload _verifiedCommand; 
+static volatile bool  _newCommandReady = false;
 
-void OBCConnection::begin() {
-  g_obcConnectionPtr = this;
-  
-  updateTxBuffer();
-  hardwareSPI.onReceive(globalSPIISRWrapper);
-  hardwareSPI.begin();
-  hardwareSPI.pushr(_txPtr[_rxIndex]); // Seed first byte into hardware FIFO
-}
+static volatile uint8_t* _rxPtr = (uint8_t*)&_incomingFrame;
+static volatile uint8_t* _txPtr = (uint8_t*)&_outgoingFrame;
+static volatile uint8_t  _rxIndex = 0;
+static volatile bool     _frameSynced = false;
+static volatile uint16_t _localErrorCount = 0;
 
-bool OBCConnection::isCommandAvailable() {
-  return _newCommandReady;
-}
-
-CommandPayload OBCConnection::getLatestCommand() {
-  CommandPayload temp;
-  noInterrupts();
-  temp = _verifiedCommand;
-  _newCommandReady = false;
-  interrupts();
-  return temp;
-}
-
-void OBCConnection::updateTelemetry(const TelemetryPayload& newTelem) {
-  noInterrupts();
-  // Safe deep copy from non-volatile argument into volatile transmission struct
-  memcpy((void*)&_outgoingFrame.payload, &newTelem, sizeof(TelemetryPayload));
-  updateTxBuffer();
-  interrupts();
-}
-
-uint16_t OBCConnection::getRxErrorCount() const {
-  return _localErrorCount;
-}
-
-uint16_t OBCConnection::calculateFletcher16(const uint8_t* data, size_t count) {
-  uint16_t sum1 = 0;
-  uint16_t sum2 = 0;
+// Internal Private Math Helpers
+static uint16_t calculateFletcher16(const uint8_t* data, size_t count) {
+  uint16_t sum1 = 0, sum2 = 0;
   for (size_t i = 0; i < count; ++i) {
     sum1 = (sum1 + data[i]) % 255;
     sum2 = (sum2 + sum1) % 255;
@@ -67,13 +26,13 @@ uint16_t OBCConnection::calculateFletcher16(const uint8_t* data, size_t count) {
   return (sum2 << 8) | sum1;
 }
 
-void OBCConnection::updateTxBuffer() {
+static void updateTxBuffer() {
   _outgoingFrame.payload.error_count = _localErrorCount;
-  // Compute checksum over Sync (2 bytes) + Payload (22 bytes) = 24 bytes
   _outgoingFrame.checksum = calculateFletcher16((const uint8_t*)&_outgoingFrame, 24);
 }
 
-void OBCConnection::handleInterrupt() {
+// The direct hardware ISR callback
+void mySPIISRHandler() {
   while (hardwareSPI.active()) {
     if (hardwareSPI.available()) {
       uint8_t incomingByte = hardwareSPI.popr();
@@ -98,30 +57,66 @@ void OBCConnection::handleInterrupt() {
           uint16_t calculated = calculateFletcher16((const uint8_t*)&_incomingFrame, 24);
           
           if (calculated == _incomingFrame.checksum) {
-            // Inspect index tracking flag byte
             if (_incomingFrame.payload.flags == 0x22) {
-              // Telemetry Poll Only: Return fresh telemetry to Pi but skip updating actuators
+                // Telemetry Poll
             } 
             else if (_incomingFrame.payload.flags == 0x11) {
-              // Valid Command: Copy data across volatile barrier into the main workspace
-              memcpy(&_verifiedCommand, (const void*)&_incomingFrame.payload, sizeof(CommandPayload));
-              _newCommandReady = true;
-            } 
-            else {
-              // Catch-all safety gate: Malformed or uninitialized flags result in a discarded frame
-              _localErrorCount++;
+                memcpy(&_verifiedCommand, (const void*)&_incomingFrame.payload, sizeof(CommandPayload));
+                _newCommandReady = true;
+            } else {
+                _localErrorCount++;
             }
           } else {
             _localErrorCount++;
           }
-
           _frameSynced = false;
           _rxIndex = 0;
-          updateTxBuffer(); // Ensure error counts are updated immediately on structural changes
+          updateTxBuffer(); 
         }
       }
-
       hardwareSPI.pushr(_txPtr[_rxIndex]);
     }
   }
+}
+
+void initOBCConnection() {
+  _rxIndex = 0;
+  _frameSynced = false;
+  _localErrorCount = 0;
+  
+  _outgoingFrame.sync[0] = 0xAA; 
+  _outgoingFrame.sync[1] = 0x55;
+  memset((void*)&_outgoingFrame.payload, 0, sizeof(TelemetryPayload));
+  updateTxBuffer();
+
+  // 1. Core initialization clears past the old NVIC lock smoothly!
+  hardwareSPI.begin();
+  
+  // 2. Register your user-space handler safely now that the NVIC vector is stable
+  hardwareSPI.onReceive(mySPIISRHandler);
+}
+
+
+bool isOBCCommandAvailable() {
+  return _newCommandReady;
+}
+
+CommandPayload getLatestOBCCommand() {
+  CommandPayload temp;
+  noInterrupts();
+  temp = _verifiedCommand;
+  _newCommandReady = false;
+  interrupts();
+  return temp;
+}
+
+void updateOBCTelemetry(const TelemetryPayload& freshTelem) {
+  noInterrupts();
+  memcpy((void*)&_outgoingFrame.payload, &freshTelem, sizeof(TelemetryPayload));
+  updateTxBuffer();
+  interrupts();
+}
+
+uint16_t getOBCRxErrorCount() {
+  return _localErrorCount;
 }
