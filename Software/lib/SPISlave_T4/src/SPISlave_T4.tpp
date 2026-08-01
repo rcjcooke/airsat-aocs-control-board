@@ -146,6 +146,8 @@ SPISlave_T4_FUNC void SPISlave_T4_OPT::begin() {
   SLAVE_SR = 0x3F00; /* Clear status register */
   SLAVE_TCR_REFRESH;
   SLAVE_TDR = 0x0; /* dummy data, must populate initial TX slot */
+  // Clear out any pending interrupts to prevent a null interrupt vector from firing and causing the Teensy to lock up
+  NVIC_CLEAR_PENDING(nvic_irq); 
   NVIC_ENABLE_IRQ(nvic_irq);
   NVIC_SET_PRIORITY(nvic_irq, 1);
 }
