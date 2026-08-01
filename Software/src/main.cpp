@@ -10,7 +10,10 @@ CommandPayload workingCommand;
 
 void setup() {
   Serial.begin(115200);
-  while (!Serial && millis() < 4000); 
+  while (!Serial); 
+  
+  // Force SPI CS high so it only activates when the Pi explicitly drives it low
+  pinMode(10, INPUT_PULLUP); 
 
   currentTelemetry.momentum = 0.0f;
   currentTelemetry.propellant = 1000; 

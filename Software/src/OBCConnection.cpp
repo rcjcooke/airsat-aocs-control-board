@@ -27,9 +27,9 @@ void OBCConnection::begin() {
   g_obcConnectionPtr = this;
   
   updateTxBuffer();
+  hardwareSPI.onReceive(globalSPIISRWrapper);
   hardwareSPI.begin();
   hardwareSPI.pushr(_txPtr[_rxIndex]); // Seed first byte into hardware FIFO
-  hardwareSPI.onReceive(globalSPIISRWrapper);
 }
 
 bool OBCConnection::isCommandAvailable() {
