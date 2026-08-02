@@ -136,18 +136,52 @@ SPISlave_T4_FUNC void SPISlave_T4_OPT::SLAVE_ISR() {
 
 SPISlave_T4_FUNC void SPISlave_T4_OPT::begin() {
   SLAVE_PORT_ADDR;
-  SLAVE_CR = LPSPI_CR_RST; /* Reset Module */
-  SLAVE_CR = 0; /* Disable Module */
-  SLAVE_FCR = 0;//x10001; /* 1x watermark for RX and TX */
-  SLAVE_IER = 0x1; /* RX Interrupt */
+
+  // 1. Trigger the hardware module reset
+  SLAVE_CR = LPSPI_CR_RST; 
+  
+  // FORCE HARDWARE BARRIER: Ensure the write physically completes across the bus lanes
+  __asm__ volatile("dmb"); 
+  delayMicroseconds(5); // Give the peripheral logic gates time to finish resetting
+
+  // 2. Disable the module cleanly
+  SLAVE_CR = 0; 
+  __asm__ volatile("dmb");
+  delayMicroseconds(2);
+
+  // 3. Clear watermarks and set up internal interrupts
+  SLAVE_FCR = 0;
+  SLAVE_IER = 0x1; /* RX Interrupt enablement */
   SLAVE_CFGR0 = 0;
   SLAVE_CFGR1 = 0;
-  SLAVE_CR |= LPSPI_CR_MEN | LPSPI_CR_DBGEN; /* Enable Module, Debug Mode */
-  SLAVE_SR = 0x3F00; /* Clear status register */
+  __asm__ volatile("dmb");
+
+  // 4. Safely enable the core module into Debug mode
+  SLAVE_CR |= LPSPI_CR_MEN | LPSPI_CR_DBGEN; 
+  __asm__ volatile("dmb");
+  delayMicroseconds(2);
+
+  // 5. Forcefully wipe the status registers cleanly
+  SLAVE_SR = 0x3F00; 
+  __asm__ volatile("dmb");
+  delayMicroseconds(2);
+
   SLAVE_TCR_REFRESH;
-  SLAVE_TDR = 0x0; /* dummy data, must populate initial TX slot */
+  
+  // 6. Seed initial baseline byte allocation
+  SLAVE_TDR = 0x0; 
+  __asm__ volatile("dmb");
+  delayMicroseconds(2);
+
   // Clear out any pending interrupts to prevent a null interrupt vector from firing and causing the Teensy to lock up
   NVIC_CLEAR_PENDING(nvic_irq); 
+  __asm__ volatile("dmb");
+
+  // 8. Safely unmask the active interrupt line at the core level
   NVIC_ENABLE_IRQ(nvic_irq);
   NVIC_SET_PRIORITY(nvic_irq, 1);
 }
+
+
+
+
