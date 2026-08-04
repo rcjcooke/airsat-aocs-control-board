@@ -32,11 +32,20 @@ static SPISlave_T4_Base* _LPSPI4 = nullptr;
 SPISlave_T4_CLASS class SPISlave_T4 : public SPISlave_T4_Base {
   public:
     SPISlave_T4();
+    // Set the interrupt enable register (IER) trigger mode for the SPI slave
+    void setIERTriggerMode(bool anyData, bool frameComplete);
     void begin();
     uint32_t transmitErrors();
     void onReceive(_SPI_ptr handler) { _spihandler = handler; }
     bool active();
     bool available();
+    // Get the contents of the status register - useful for snapshotting at the beginning of an interrupt handler
+    u_int32_t getStatus();
+    // Is there a byte waiting to be read from the receive FIFO? If status is supplied, then extracts the information from the supplied status
+    bool isDataAvailable();
+    bool isDataAvailable(u_int32_t status);
+
+    // bool isTransmitError();
     void sniffer(bool enable = 1);
     void swapPins(bool enable = 1);
     void pushr(uint32_t data);
@@ -48,6 +57,7 @@ SPISlave_T4_CLASS class SPISlave_T4 : public SPISlave_T4_Base {
     int _portnum = 0;
     uint32_t nvic_irq = 0;
     uint32_t transmit_errors = 0;
+    uint32_t _ierTriggerMode = 0;
     bool sniffer_enabled = 0;
 };
 

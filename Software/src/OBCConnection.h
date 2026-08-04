@@ -3,6 +3,8 @@
 
 #include <Arduino.h>
 
+#include "SPIConnection.h"
+
 #pragma pack(push, 1)
 struct CommandPayload {
   float torque;
@@ -15,7 +17,7 @@ struct TelemetryPayload {
   float momentum;       // 4 bytes
   uint16_t propellant;  // 2 bytes
   uint16_t error_count; // 2 bytes
-  uint8_t padding[14];  // FIXED: Expanded from 1 byte to a 14-byte array to match the 22-byte footprint
+  uint8_t padding[14];
 }; // Total Size: 4 + 2 + 2 + 14 = 22 bytes
 
 struct CommandFrame {
@@ -31,16 +33,39 @@ struct TelemetryFrame {
 }; // Total Size: 2 + 22 + 2 = 26 bytes
 #pragma pack(pop)
 
-// Exposed high-level C interface functions for main.cpp
-void initOBCConnection();
-bool isOBCCommandAvailable();
-CommandPayload getLatestOBCCommand();
-void updateOBCTelemetry(const TelemetryPayload& freshTelem);
-uint16_t getOBCRxErrorCount();
-uint32_t getOBCTotalBytesReceived();
-uint32_t getOBCTotalInterruptsReceived();
-uint32_t getOBCCSFallingEdges();
-uint32_t getOBCCSLineState();
-void getOBCRawRxBufferSnapshot(uint8_t* destinationBuffer, size_t maxBytes);
+class OBCConnection {
+ public:
+  explicit OBCConnection(bool spiDebug = false,
+                         uint8_t frameSize = static_cast<uint8_t>(sizeof(CommandFrame)));
+
+  void initialize();
+  bool hasNewCommand() const;
+  CommandPayload takeLatestCommand();
+  void updateTelemetry(const TelemetryPayload& telemetry);
+
+  uint16_t rxErrorCount() const;
+  uint32_t totalBytesReceived() const;
+  uint32_t totalInterruptsReceived() const;
+  uint32_t csFallingEdges() const;
+  uint32_t csLineState() const;
+  void copyLastRxFrame(uint8_t* destinationBuffer, size_t maxBytes) const;
+
+ private:
+  static constexpr uint8_t kSyncByte0 = 0xAA;
+  static constexpr uint8_t kSyncByte1 = 0x55;
+
+  static OBCConnection* s_instance;
+  static void onFrameReceivedCallback(const uint8_t* frame, uint8_t frameSize);
+
+  void onFrameReceived(const uint8_t* frame, uint8_t frameSize);
+  void refreshTelemetryTxFrame();
+  static uint16_t calculateFletcher16(const uint8_t* data, size_t count);
+
+  SPIConnection m_spiConnection;
+  volatile bool m_newCommandReady;
+  volatile uint16_t m_localErrorCount;
+  CommandPayload m_verifiedCommand;
+  TelemetryFrame m_outgoingFrame;
+};
 
 #endif

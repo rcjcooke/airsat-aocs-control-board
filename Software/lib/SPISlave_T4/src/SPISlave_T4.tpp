@@ -14,7 +14,6 @@
 #define SLAVE_PORT_ADDR volatile uint32_t *spiAddr = &(*(volatile uint32_t*)(0x40394000 + (0x4000 * _portnum)))
 #define SLAVE_PINS_ADDR volatile uint32_t *spiAddr = &(*(volatile uint32_t*)(0x401F84EC + (_portnum * 0x10)))
 
- 
 void lpspi4_slave_isr() {
   _LPSPI4->SLAVE_ISR();
 }
@@ -24,23 +23,24 @@ SPISlave_T4_FUNC SPISlave_T4_OPT::SPISlave_T4() {
   if ( port == &SPI ) {
     _LPSPI4 = this;
     _portnum = 3;
-    CCM_CCGR1 |= (3UL << 6);
+    // Enable the LPSI4 clock
+    CCM_CCGR1 |= CCM_CCGR1_LPSPI4(CCM_CCGR_ON);
+    // Default to triggering on any data available or data required
+    _ierTriggerMode = LPSPI_IER_RDIE | LPSPI_IER_TDIE;
     nvic_irq = 32 + _portnum;
     _VectorsRam[16 + nvic_irq] = lpspi4_slave_isr;
 
-    /* Alternate pins not broken out on Teensy 4.0/4.1 for LPSPI4 */
-    SLAVE_PINS_ADDR;
-    spiAddr[0] = 0; /* PCS0_SELECT_INPUT */
-    spiAddr[1] = 0; /* SCK_SELECT_INPUT */
-    spiAddr[2] = 0; /* SDI_SELECT_INPUT */
-    spiAddr[3] = 0; /* SDO_SELECT_INPUT */
-    IOMUXC_SW_MUX_CTL_PAD_GPIO_B0_03 = 0x3; /* LPSPI4 SCK (CLK) */
-    IOMUXC_SW_MUX_CTL_PAD_GPIO_B0_01 = 0x3; /* LPSPI4 SDI (MISO) */
-    IOMUXC_SW_MUX_CTL_PAD_GPIO_B0_02 = 0x3; /* LPSPI4 SDO (MOSI) */
-    IOMUXC_SW_MUX_CTL_PAD_GPIO_B0_00 = 0x3; /* LPSPI4 PCS0 (CS) */
+    // Set up pins and muxes
+    IOMUXC_LPSPI4_PCS0_SELECT_INPUT = 0x0; /* PCS0_SELECT_INPUT */
+    IOMUXC_LPSPI4_SDI_SELECT_INPUT = 0x0; /* SDI_SELECT_INPUT */
+    IOMUXC_LPSPI4_SDO_SELECT_INPUT = 0x0; /* SDO_SELECT_INPUT */
+    IOMUXC_LPSPI4_SCK_SELECT_INPUT = 0x0; /* SCK_SELECT_INPUT */
+    IOMUXC_SW_MUX_CTL_PAD_GPIO_B0_00 = 0x3; /* LPSPI4 PCS0 (CS) - Chip Select driven from Master*/
+    IOMUXC_SW_MUX_CTL_PAD_GPIO_B0_01 = 0x3; /* LPSPI4 SDI (MISO) - MOSI from Master */
+    IOMUXC_SW_MUX_CTL_PAD_GPIO_B0_02 = 0x3; /* LPSPI4 SDO (MOSI) - MISO from Master */
+    IOMUXC_SW_MUX_CTL_PAD_GPIO_B0_03 = 0x3; /* LPSPI4 SCK (CLK) - Clock driven from Master */
   } 
 }
-
 
 SPISlave_T4_FUNC void SPISlave_T4_OPT::swapPins(bool enable) {
   SLAVE_PORT_ADDR;
@@ -78,6 +78,19 @@ SPISlave_T4_FUNC void SPISlave_T4_OPT::sniffer(bool enable) {
   }
 }
 
+SPISlave_T4_FUNC u_int32_t SPISlave_T4_OPT::getStatus() {
+  SLAVE_PORT_ADDR;
+  return SLAVE_SR;
+}
+
+SPISlave_T4_FUNC bool SPISlave_T4_OPT::isDataAvailable() {
+  SLAVE_PORT_ADDR;
+  return isDataAvailable(SLAVE_SR);
+}
+
+SPISlave_T4_FUNC bool SPISlave_T4_OPT::isDataAvailable(u_int32_t status) {
+  return (status & LPSPI_SR_RDF);
+}
 
 SPISlave_T4_FUNC bool SPISlave_T4_OPT::active() {
   SLAVE_PORT_ADDR;
@@ -90,6 +103,10 @@ SPISlave_T4_FUNC bool SPISlave_T4_OPT::available() {
   return ( (SLAVE_SR & (1UL << 8)) ) ? 1 : 0;
 }
 
+// SPISlave_T4_FUNC bool SPISlave_T4_OPT::isTransmitError() {
+//   SLAVE_PORT_ADDR;
+//   return ( (SLAVE_SR & (1UL << 11)) ) ? 1 : 0;
+// }
 
 SPISlave_T4_FUNC void SPISlave_T4_OPT::pushr(uint32_t data) {
   SLAVE_PORT_ADDR;
@@ -99,89 +116,63 @@ SPISlave_T4_FUNC void SPISlave_T4_OPT::pushr(uint32_t data) {
 
 SPISlave_T4_FUNC uint32_t SPISlave_T4_OPT::popr() {
   SLAVE_PORT_ADDR;
-  uint32_t data = SLAVE_RDR;
-  SLAVE_SR = (1UL << 8); /* Clear WCF */
-  return data;
+  // uint32_t data = SLAVE_RDR;
+  // SLAVE_SR = (1UL << 8); /* Clear WCF */
+  return SLAVE_RDR;
 }
 
 
 SPISlave_T4_FUNC void SPISlave_T4_OPT::SLAVE_ISR() {
 
-  SLAVE_PORT_ADDR;
+  // SLAVE_PORT_ADDR;
 
   if ( _spihandler ) {
     _spihandler();
-    SLAVE_SR = 0x3F00;
+    // SLAVE_SR = 0x3F00;
     asm volatile ("dsb");
     return;
   }
 
-  while ( !(SLAVE_SR & (1UL << 9)) ) { /* FCF: Frame Complete Flag, set when PCS deasserts */
-    if ( SLAVE_SR & (1UL << 11) ) { /* transmit error, clear flag, check cabling */
-      SLAVE_SR = (1UL << 11);
-      transmit_errors++;
-    }
-    if ( (SLAVE_SR & (1UL << 8)) ) { /* WCF set */
-      uint32_t val = SLAVE_RDR;
-      Serial.print(val); Serial.print(" ");
-      SLAVE_TDR = val;
-      SLAVE_SR = (1UL << 8); /* Clear WCF */
-    }
-  }
-  Serial.println();
-  SLAVE_SR = 0x3F00; /* Clear remaining flags on exit */
-  asm volatile ("dsb");
+  // while ( !(SLAVE_SR & (1UL << 9)) ) { /* FCF: Frame Complete Flag, set when PCS deasserts */
+  //   if ( SLAVE_SR & (1UL << 11) ) { /* transmit error, clear flag, check cabling */
+  //     SLAVE_SR = (1UL << 11);
+  //     transmit_errors++;
+  //   }
+  //   if ( (SLAVE_SR & (1UL << 8)) ) { /* WCF set */
+  //     uint32_t val = SLAVE_RDR;
+  //     Serial.print(val); Serial.print(" ");
+  //     SLAVE_TDR = val;
+  //     SLAVE_SR = (1UL << 8); /* Clear WCF */
+  //   }
+  // }
+  // Serial.println();
+  // SLAVE_SR = 0x3F00; /* Clear remaining flags on exit */
+  // asm volatile ("dsb");
 }
 
+SPISlave_T4_FUNC void SPISlave_T4_OPT::setIERTriggerMode(bool anyData, bool frameComplete) {
+  SLAVE_PORT_ADDR;
+  _ierTriggerMode = anyData ? LPSPI_IER_RDIE | LPSPI_IER_TDIE : 0;
+  _ierTriggerMode |= frameComplete ? LPSPI_IER_FCIE : 0;
+  SLAVE_IER = _ierTriggerMode;
+}
 
 SPISlave_T4_FUNC void SPISlave_T4_OPT::begin() {
+  // Set up Transmit Command Register (TCR) _before_ enabling LPSPI in Slave mode
+
   SLAVE_PORT_ADDR;
-
-  // 1. Trigger the hardware module reset
-  SLAVE_CR = LPSPI_CR_RST; 
-  
-  // FORCE HARDWARE BARRIER: Ensure the write physically completes across the bus lanes
-  __asm__ volatile("dmb"); 
-  delayMicroseconds(5); // Give the peripheral logic gates time to finish resetting
-
-  // 2. Disable the module cleanly
-  SLAVE_CR = 0; 
-  __asm__ volatile("dmb");
-  delayMicroseconds(2);
-
-  // 3. Clear watermarks and set up internal interrupts
-  SLAVE_FCR = 0;
-  SLAVE_IER = 0x1; /* RX Interrupt enablement */
+  SLAVE_CR = LPSPI_CR_RST; /* Reset Module */
+  SLAVE_CR = 0; /* Disable Module */
+  SLAVE_FCR = 0;//x10001; /* 1x watermark for RX and TX */
+  // BUG FIX: SLAVE_IER was incorrectly set to trigger on TDIE only
+  SLAVE_IER = _ierTriggerMode; /* RX Interrupt */
   SLAVE_CFGR0 = 0;
   SLAVE_CFGR1 = 0;
-  __asm__ volatile("dmb");
-
-  // 4. Safely enable the core module into Debug mode
-  SLAVE_CR |= LPSPI_CR_MEN | LPSPI_CR_DBGEN; 
-  __asm__ volatile("dmb");
-  delayMicroseconds(2);
-
-  // 5. Forcefully wipe the status registers cleanly
-  SLAVE_SR = 0x3F00; 
-  __asm__ volatile("dmb");
-  delayMicroseconds(2);
-
+  SLAVE_CR |= LPSPI_CR_MEN | LPSPI_CR_DBGEN; /* Enable Module, Debug Mode */
+  SLAVE_SR = 0x3F00; /* Clear status register */
+  // Note: This will zero off all TCR bits except the frame size - which is ok but does mask some other configuration options
   SLAVE_TCR_REFRESH;
-  
-  // 6. Seed initial baseline byte allocation
-  SLAVE_TDR = 0x0; 
-  __asm__ volatile("dmb");
-  delayMicroseconds(2);
-
-  // Clear out any pending interrupts to prevent a null interrupt vector from firing and causing the Teensy to lock up
-  NVIC_CLEAR_PENDING(nvic_irq); 
-  __asm__ volatile("dmb");
-
-  // 8. Safely unmask the active interrupt line at the core level
+  SLAVE_TDR = 0x0; /* dummy data, must populate initial TX slot */
   NVIC_ENABLE_IRQ(nvic_irq);
   NVIC_SET_PRIORITY(nvic_irq, 1);
 }
-
-
-
-
