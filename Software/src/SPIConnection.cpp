@@ -7,41 +7,45 @@
 namespace {
 SPISlave_T4<&SPI, SPI_8_BITS> g_spi;
 
-uint8_t clampFrameSize(uint8_t requestedFrameSize) {
-  if (requestedFrameSize < 2) {
-    return 2;
+uint8_t clampPayloadSize(uint8_t requestedPayloadSize) {
+  if (requestedPayloadSize == 0) {
+    return 1;
   }
-  if (requestedFrameSize > SPIConnection::kMaxFrameSize) {
-    return SPIConnection::kMaxFrameSize;
+  if (requestedPayloadSize > SPIConnection::kMaxPayloadSize) {
+    return SPIConnection::kMaxPayloadSize;
   }
-  return requestedFrameSize;
+  return requestedPayloadSize;
 }
 }  // namespace
 
 SPIConnection* SPIConnection::s_instance = nullptr;
 
-SPIConnection::SPIConnection(bool debugEnabled, uint8_t frameSize)
+SPIConnection::SPIConnection(bool debugEnabled, uint8_t payloadSize)
     : m_debugEnabled(debugEnabled),
-      m_frameSize(clampFrameSize(frameSize)),
+      m_payloadSize(clampPayloadSize(payloadSize)),
+      m_frameSize(static_cast<uint8_t>(m_payloadSize + kFrameOverhead)),
       m_state(State::Idle),
       m_spiInputBuffer{0},
       m_spiOutputBuffer{0},
       m_spiBufferIndex(0),
       m_frameSynced(false),
-      m_lastRxFrame{0},
-      m_frameReady(false),
+      m_lastRxPayload{0},
       m_nextTxFrame{0},
       m_interruptCalls(0),
       m_lastByteReceived(0),
       m_totalBytesReceived(0),
       m_totalFramesReceived(0),
+      m_checksumFailureCount(0),
+      m_syncDropCount(0),
       m_bytesLostSyncing(0),
       m_partialFrameErrorCount(0),
       m_bytesReceivedInLastInterrupt(0),
       m_uncheckedInterruptDebugData(false),
       m_fcfsReceived(0),
       m_txErrorCount(0),
-      m_frameReadyHandler(nullptr) {}
+      m_payloadReadyHandler(nullptr) {
+  buildTxFrameFromPayload(nullptr, 0);
+}
 
 void SPIConnection::begin() {
   s_instance = this;
@@ -49,7 +53,6 @@ void SPIConnection::begin() {
   m_state = State::Idle;
   m_spiBufferIndex = 0;
   m_frameSynced = false;
-  m_frameReady = false;
   m_uncheckedInterruptDebugData = false;
 
   memcpy((void*)m_spiOutputBuffer, (const void*)m_nextTxFrame, m_frameSize);
@@ -64,35 +67,32 @@ void SPIConnection::begin() {
   }
 }
 
-void SPIConnection::setFrameReadyHandler(FrameReadyHandler handler) {
+void SPIConnection::setPayloadReadyHandler(PayloadReadyHandler handler) {
   noInterrupts();
-  m_frameReadyHandler = handler;
+  m_payloadReadyHandler = handler;
   interrupts();
 }
 
-void SPIConnection::setNextTxFrame(const uint8_t* frame, size_t frameSize) {
-  if (frame == nullptr) {
-    return;
-  }
-
-  const size_t boundedSize = (frameSize < m_frameSize) ? frameSize : m_frameSize;
-
+void SPIConnection::setNextTxPayload(const uint8_t* payload, size_t payloadSize) {
   noInterrupts();
-  memset(m_nextTxFrame, 0, sizeof(m_nextTxFrame));
-  memcpy(m_nextTxFrame, frame, boundedSize);
+  buildTxFrameFromPayload(payload, payloadSize);
   interrupts();
 }
 
-void SPIConnection::copyLastRxFrame(uint8_t* destination, size_t maxBytes) const {
+void SPIConnection::copyLastRxPayload(uint8_t* destination, size_t maxBytes) const {
   if (destination == nullptr || maxBytes == 0) {
     return;
   }
 
-  const size_t boundedSize = (maxBytes < m_frameSize) ? maxBytes : m_frameSize;
+  const size_t boundedSize = (maxBytes < m_payloadSize) ? maxBytes : m_payloadSize;
 
   noInterrupts();
-  memcpy(destination, (const void*)m_lastRxFrame, boundedSize);
+  memcpy(destination, (const void*)m_lastRxPayload, boundedSize);
   interrupts();
+}
+
+uint8_t SPIConnection::payloadSize() const {
+  return m_payloadSize;
 }
 
 uint8_t SPIConnection::frameSize() const {
@@ -106,6 +106,8 @@ SPIConnection::Stats SPIConnection::statsSnapshot() const {
       m_lastByteReceived,
       m_totalBytesReceived,
       m_totalFramesReceived,
+      m_checksumFailureCount,
+      m_syncDropCount,
       m_bytesLostSyncing,
       m_partialFrameErrorCount,
       m_bytesReceivedInLastInterrupt,
@@ -113,6 +115,55 @@ SPIConnection::Stats SPIConnection::statsSnapshot() const {
       m_txErrorCount};
   interrupts();
   return snapshot;
+}
+
+uint16_t SPIConnection::calculateFletcher16(const uint8_t* data, size_t count) {
+  uint16_t sum1 = 0;
+  uint16_t sum2 = 0;
+
+  for (size_t i = 0; i < count; ++i) {
+    sum1 = static_cast<uint16_t>((sum1 + data[i]) % 255);
+    sum2 = static_cast<uint16_t>((sum2 + sum1) % 255);
+  }
+
+  return static_cast<uint16_t>((sum2 << 8) | sum1);
+}
+
+void SPIConnection::buildTxFrameFromPayload(const uint8_t* payload, size_t payloadSize) {
+  const size_t boundedSize = (payloadSize < m_payloadSize) ? payloadSize : m_payloadSize;
+
+  memset(m_nextTxFrame, 0, m_frameSize);
+  m_nextTxFrame[0] = kSyncByte0;
+  m_nextTxFrame[1] = kSyncByte1;
+
+  if (payload != nullptr && boundedSize > 0) {
+    memcpy(&m_nextTxFrame[kSyncSize], payload, boundedSize);
+  }
+
+  const uint16_t checksum = calculateFletcher16(m_nextTxFrame, m_frameSize - kChecksumSize);
+  m_nextTxFrame[m_frameSize - 2] = static_cast<uint8_t>(checksum & 0xFF);
+  m_nextTxFrame[m_frameSize - 1] = static_cast<uint8_t>((checksum >> 8) & 0xFF);
+}
+
+void SPIConnection::validateAndDispatchFrame() {
+  const uint16_t calculatedChecksum =
+      calculateFletcher16(m_spiInputBuffer, m_frameSize - kChecksumSize);
+  const uint16_t receivedChecksum =
+      static_cast<uint16_t>(m_spiInputBuffer[m_frameSize - 2]) |
+      (static_cast<uint16_t>(m_spiInputBuffer[m_frameSize - 1]) << 8);
+
+  if (calculatedChecksum != receivedChecksum) {
+    ++m_checksumFailureCount;
+    return;
+  }
+
+  memcpy((void*)m_lastRxPayload, (const void*)&m_spiInputBuffer[kSyncSize], m_payloadSize);
+
+  if (m_payloadReadyHandler != nullptr) {
+    m_payloadReadyHandler((const uint8_t*)m_lastRxPayload, m_payloadSize);
+  }
+
+  ++m_totalFramesReceived;
 }
 
 void SPIConnection::handleMessageISR() {
@@ -157,6 +208,7 @@ void SPIConnection::handleMessage() {
 
       if (syncMismatch) {
         m_frameSynced = false;
+        ++m_syncDropCount;
         ++m_bytesLostSyncing;
         m_spiBufferIndex = 0;
         ++m_partialFrameErrorCount;
@@ -165,15 +217,8 @@ void SPIConnection::handleMessage() {
         ++m_spiBufferIndex;
 
         if (m_spiBufferIndex >= m_frameSize) {
-          memcpy((void*)m_lastRxFrame, (const void*)m_spiInputBuffer, m_frameSize);
-          m_frameReady = true;
-
-          if (m_frameReadyHandler != nullptr) {
-            m_frameReadyHandler((const uint8_t*)m_lastRxFrame, m_frameSize);
-          }
-
+          validateAndDispatchFrame();
           m_spiBufferIndex = 0;
-          ++m_totalFramesReceived;
         }
       }
     }

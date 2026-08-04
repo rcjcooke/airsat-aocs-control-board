@@ -11,5 +11,10 @@
 			"path": "SPISlaveTest"
 		}
 	],
-	"settings": {}
+	"settings": {
+		"chat.tools.terminal.autoApprove": {
+			"pio": true,
+			"C:\\Users\\rcjco\\.platformio\\penv\\Scripts\\platformio.exe": true
+		}
+	}
 }

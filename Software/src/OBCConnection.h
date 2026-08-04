@@ -19,24 +19,12 @@ struct TelemetryPayload {
   uint16_t error_count; // 2 bytes
   uint8_t padding[14];
 }; // Total Size: 4 + 2 + 2 + 14 = 22 bytes
-
-struct CommandFrame {
-  uint8_t sync[2]; 
-  CommandPayload payload;
-  uint16_t checksum;
-}; // Total Size: 2 + 22 + 2 = 26 bytes
-
-struct TelemetryFrame {
-  uint8_t sync[2]; 
-  TelemetryPayload payload;
-  uint16_t checksum;
-}; // Total Size: 2 + 22 + 2 = 26 bytes
 #pragma pack(pop)
 
 class OBCConnection {
  public:
   explicit OBCConnection(bool spiDebug = false,
-                         uint8_t frameSize = static_cast<uint8_t>(sizeof(CommandFrame)));
+                         uint8_t payloadSize = static_cast<uint8_t>(sizeof(CommandPayload)));
 
   void initialize();
   bool hasNewCommand() const;
@@ -46,26 +34,27 @@ class OBCConnection {
   uint16_t rxErrorCount() const;
   uint32_t totalBytesReceived() const;
   uint32_t totalInterruptsReceived() const;
-  uint32_t csFallingEdges() const;
-  uint32_t csLineState() const;
-  void copyLastRxFrame(uint8_t* destinationBuffer, size_t maxBytes) const;
+  uint32_t syncDropCount() const;
+  uint32_t commandCount() const;
+  uint32_t noOpCount() const;
+  void copyLastRxPayload(uint8_t* destinationBuffer, size_t maxBytes) const;
 
  private:
-  static constexpr uint8_t kSyncByte0 = 0xAA;
-  static constexpr uint8_t kSyncByte1 = 0x55;
+  static constexpr uint8_t kCommandFrame = 0x11;
+  static constexpr uint8_t kNoOpFrame = 0x22;
 
   static OBCConnection* s_instance;
-  static void onFrameReceivedCallback(const uint8_t* frame, uint8_t frameSize);
+  static void onPayloadReceivedCallback(const uint8_t* payload, uint8_t payloadSize);
 
-  void onFrameReceived(const uint8_t* frame, uint8_t frameSize);
-  void refreshTelemetryTxFrame();
-  static uint16_t calculateFletcher16(const uint8_t* data, size_t count);
+  void onPayloadReceived(const uint8_t* payload, uint8_t payloadSize);
+  void queueTelemetryPayload();
 
   SPIConnection m_spiConnection;
   volatile bool m_newCommandReady;
-  volatile uint16_t m_localErrorCount;
   CommandPayload m_verifiedCommand;
-  TelemetryFrame m_outgoingFrame;
+  TelemetryPayload m_telemetryPayload;
+  uint32_t m_commandCount;
+  uint32_t m_noOpCount;
 };
 
 #endif

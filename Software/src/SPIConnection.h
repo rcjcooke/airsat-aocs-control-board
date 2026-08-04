@@ -7,16 +7,22 @@
 
 class SPIConnection {
  public:
-  static constexpr uint8_t kDefaultFrameSize = 26;
-  static constexpr uint8_t kMaxFrameSize = 64;
+  static constexpr uint8_t kSyncSize = 2;
+  static constexpr uint8_t kChecksumSize = 2;
+  static constexpr uint8_t kFrameOverhead = kSyncSize + kChecksumSize;
+  static constexpr uint8_t kDefaultPayloadSize = 22;
+  static constexpr uint8_t kMaxPayloadSize = 60;
+  static constexpr uint8_t kMaxFrameSize = kMaxPayloadSize + kFrameOverhead;
 
-  using FrameReadyHandler = void (*)(const uint8_t* frame, uint8_t frameSize);
+  using PayloadReadyHandler = void (*)(const uint8_t* payload, uint8_t payloadSize);
 
   struct Stats {
     uint32_t interruptCalls;
     uint32_t lastByteReceived;
     uint32_t totalBytesReceived;
     uint32_t totalFramesReceived;
+    uint32_t checksumFailureCount;
+    uint32_t syncDropCount;
     uint32_t bytesLostSyncing;
     uint32_t partialFrameErrorCount;
     uint32_t bytesReceivedInLastInterrupt;
@@ -24,13 +30,14 @@ class SPIConnection {
     uint32_t txErrorCount;
   };
 
-  explicit SPIConnection(bool debugEnabled, uint8_t frameSize = kDefaultFrameSize);
+  explicit SPIConnection(bool debugEnabled, uint8_t payloadSize = kDefaultPayloadSize);
 
   void begin();
-  void setFrameReadyHandler(FrameReadyHandler handler);
-  void setNextTxFrame(const uint8_t* frame, size_t frameSize);
-  void copyLastRxFrame(uint8_t* destination, size_t maxBytes) const;
+  void setPayloadReadyHandler(PayloadReadyHandler handler);
+  void setNextTxPayload(const uint8_t* payload, size_t payloadSize);
+  void copyLastRxPayload(uint8_t* destination, size_t maxBytes) const;
 
+  uint8_t payloadSize() const;
   uint8_t frameSize() const;
   Stats statsSnapshot() const;
 
@@ -44,10 +51,15 @@ class SPIConnection {
   static constexpr uint8_t kSyncByte0 = 0xAA;
   static constexpr uint8_t kSyncByte1 = 0x55;
 
+  static uint16_t calculateFletcher16(const uint8_t* data, size_t count);
+
   static void handleMessageISR();
   void handleMessage();
+  void buildTxFrameFromPayload(const uint8_t* payload, size_t payloadSize);
+  void validateAndDispatchFrame();
 
   bool m_debugEnabled;
+  uint8_t m_payloadSize;
   uint8_t m_frameSize;
   volatile State m_state;
 
@@ -56,8 +68,7 @@ class SPIConnection {
   uint8_t m_spiBufferIndex;
 
   bool m_frameSynced;
-  volatile uint8_t m_lastRxFrame[kMaxFrameSize];
-  volatile bool m_frameReady;
+  volatile uint8_t m_lastRxPayload[kMaxPayloadSize];
 
   uint8_t m_nextTxFrame[kMaxFrameSize];
 
@@ -65,6 +76,8 @@ class SPIConnection {
   volatile uint32_t m_lastByteReceived;
   volatile uint32_t m_totalBytesReceived;
   volatile uint32_t m_totalFramesReceived;
+  volatile uint32_t m_checksumFailureCount;
+  volatile uint32_t m_syncDropCount;
   volatile uint32_t m_bytesLostSyncing;
   volatile uint32_t m_partialFrameErrorCount;
   volatile uint32_t m_bytesReceivedInLastInterrupt;
@@ -72,7 +85,7 @@ class SPIConnection {
   volatile uint32_t m_fcfsReceived;
   volatile uint32_t m_txErrorCount;
 
-  FrameReadyHandler m_frameReadyHandler;
+  PayloadReadyHandler m_payloadReadyHandler;
 
   static SPIConnection* s_instance;
 };
