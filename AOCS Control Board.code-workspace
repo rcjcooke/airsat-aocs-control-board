@@ -5,6 +5,10 @@
 		},
 		{
 			"path": "Software"
+		},
+		{
+			"name": "SPISlaveTest",
+			"path": "SPISlaveTest"
 		}
 	],
 	"settings": {}
