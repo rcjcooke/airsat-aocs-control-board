@@ -27,6 +27,7 @@ static volatile SPIState _spiState = SPIState::IDLE;
 
 // Monitoring counters
 static volatile uint32_t _interruptCalls = 0;
+static volatile uint32_t _lastByteReceived = 0;
 static volatile uint32_t _totalBytesReceived = 0;
 static volatile uint32_t _totalFramesReceived = 0;
 static volatile uint32_t _bytesLostSyncing = 0;
@@ -35,36 +36,29 @@ static volatile uint32_t _bytesReceivedInLastInterrupt = 0;
 static volatile bool _uncheckedInterruptDebugData = false;
 static volatile uint32_t _fcfsReceived = 0;
 static volatile uint32_t _txErrorCount = 0;
-static volatile uint32_t bytesThisTransfer = 0;
-static volatile uint32_t transferStartUs = 0;
-static volatile float sckHz = 0;
 
 void handleMessage() {
   _interruptCalls++;
-  if ((mySPI.isByteAvailable()) && bytesThisTransfer == 0) {
-    transferStartUs = micros();
-  }
-
   if (!_uncheckedInterruptDebugData) _bytesReceivedInLastInterrupt = 0;
-  while (mySPI.isByteAvailable()) { // data ready in receive FIFO
+  while (mySPI.isDataAvailable()) { // data ready in receive FIFO
 
     /* Receive */
 
-    uint32_t rx_data = LPSPI4_RDR; // Read the next incoming byte - automatically clears the RDF flag
+    uint32_t rxData = mySPI.popr(); // Read the next incoming byte - automatically clears the RDF flag
+    _lastByteReceived = rxData; // Record it for debug purposes
     // Update debug counters
     _totalBytesReceived++;
-    bytesThisTransfer++;
     if (!_uncheckedInterruptDebugData) _bytesReceivedInLastInterrupt++;
 
     // Doing our own frame syncing because the CS management from the Raspberry Pi seems unreliable
     if (!_frameSynced) {
       _spiState = SPIState::SYNCING;
       // Look for the sync header bytes 0xAA, 0x55 to establish frame alignment
-      if (_spiInputBufferIndex == 0 && rx_data == SYNC_BYTE_0) {
-        _spiInputBuffer[_spiInputBufferIndex] = rx_data;
+      if (_spiInputBufferIndex == 0 && rxData == SYNC_BYTE_0) {
+        _spiInputBuffer[_spiInputBufferIndex] = rxData;
         _spiInputBufferIndex = 1;
-      } else if (_spiInputBufferIndex == 1 && rx_data == SYNC_BYTE_1) {
-        _spiInputBuffer[_spiInputBufferIndex] = rx_data;
+      } else if (_spiInputBufferIndex == 1 && rxData == SYNC_BYTE_1) {
+        _spiInputBuffer[_spiInputBufferIndex] = rxData;
         _spiInputBufferIndex = 2;
         // Sync established
         _frameSynced = true;
@@ -74,14 +68,14 @@ void handleMessage() {
       }
     } else {
       _spiState = SPIState::TRANSCEIVING;
-      // Store it in the circular input buffer
-      _spiInputBuffer[_spiInputBufferIndex] = rx_data;
       // Check sync
-      if ((_spiInputBufferIndex == 0 && (rx_data != SYNC_BYTE_0)) || (_spiInputBufferIndex == 1 && (rx_data != SYNC_BYTE_1))) {
+      if ((_spiInputBufferIndex == 0 && (rxData != SYNC_BYTE_0)) || (_spiInputBufferIndex == 1 && (rxData != SYNC_BYTE_1))) {
         _frameSynced = false;
         _bytesLostSyncing++;
         _spiInputBufferIndex = 0;
       } else {
+        // Store it in the circular input buffer
+        _spiInputBuffer[_spiInputBufferIndex] = rxData;
         _spiInputBufferIndex++;
         if (_spiInputBufferIndex >= SPI_FRAME_SIZE) {
           // Save the frame
@@ -99,22 +93,24 @@ void handleMessage() {
       }
     }
 
-    /* Transmit */
-
-    if ((LPSPI4_SR & LPSPI_SR_TDF)) { 
-      // The number of words in the transmit FIFO is less than the watermark, so fill it up
-        LPSPI4_TDR = rx_data; // Loopback for now
-    }
-
-    /* Error checking */
-
-    if (LPSPI4_SR & LPSPI_SR_TEF) {
-      // Transmit error flag is set, indicating a transmit FIFO underflow or other error
-      // Clear it and record the error
-      LPSPI4_SR = LPSPI_SR_TEF;
-      _txErrorCount++;
-    }
   }
+
+  /* Transmit */
+
+  if (LPSPI4_SR & LPSPI_SR_TDF) {
+    // The number of words in the transmit FIFO is less than the watermark, so fill it up
+    LPSPI4_TDR = 0xBE; // Loopback for now
+  }
+
+  /* Error checking */
+
+  if (LPSPI4_SR & LPSPI_SR_TEF) {
+    // Transmit error flag is set, indicating a transmit FIFO underflow or other error
+    // Clear it and record the error
+    LPSPI4_SR = LPSPI_SR_TEF;
+    _txErrorCount++;
+  }
+
   // Flag that monitoring data is available
   _uncheckedInterruptDebugData = true;
 
@@ -123,13 +119,6 @@ void handleMessage() {
     LPSPI4_SR = LPSPI_SR_FCF;
     // Don't do anything with it because it's been found to be unreliable
     _fcfsReceived++;
-
-    // Calculate the approximate SCK frequency based on the time taken for this transfer
-    uint32_t transferEndUs = micros();
-    uint32_t bitCount = bytesThisTransfer * 8;
-    float intervalSec = (transferEndUs - transferStartUs) * 1e-6f;
-    sckHz = intervalSec > 0 ? bitCount / intervalSec : 0.0f;
-    bytesThisTransfer = 0;
   }
 
   // Clear off the Word flag - we don't care about it
@@ -362,22 +351,25 @@ void setup() {
 
 void loop() {
   static unsigned long lastPrintTime = 0;
-  if (millis() - lastPrintTime >= 1000) {
+  if (millis() - lastPrintTime >= 4000) {
     lastPrintTime = millis();
     if (SPI_DEBUG) {
       // Print out the important run-time status register details
       printSRRegisterDetail();
       printFSRRegisterDetail();
       printRSRRegisterDetail();
-      Serial.printf("[main] [SPI DEBUG] Number of interrupt calls: %lu | TX Errors: %lu | Last SCK Frequency: %.2f kHz\r\n", _interruptCalls, _txErrorCount, sckHz / 1000.0f);
+      Serial.printf("[main] [SPI DEBUG] SPI State: %s\r\n", 
+                    _spiState == SPIState::IDLE ? "IDLE" : (_spiState == SPIState::SYNCING ? "SYNCING" : "TRANSCEIVING"));
+      Serial.printf("[main] [SPI DEBUG] Number of interrupt calls: %lu | TX Errors: %lu\r\n", _interruptCalls, _txErrorCount);
       if (_uncheckedInterruptDebugData) {
         _uncheckedInterruptDebugData = false;
         Serial.printf("[main] [SPI DEBUG] Bytes received in last interrupt: %lu | Total bytes received: %lu | Bytes lost syncing: %lu\r\n", _bytesReceivedInLastInterrupt, _totalBytesReceived, _bytesLostSyncing);
-        Serial.printf("[main] [SPI DEBUG] Input Buffer: ");
-        for (int i = 0; i < SPI_FRAME_SIZE; i++) {
-          Serial.printf("%02X ", _spiInputBuffer[i]);
-        }
-        Serial.println();
+        Serial.printf("[main] [SPI DEBUG] Last byte received: %02X\r\n", _lastByteReceived);
+        // Serial.printf("[main] [SPI DEBUG] Input Buffer: ");
+        // for (int i = 0; i < SPI_FRAME_SIZE; i++) {
+        //   Serial.printf("%02X ", _spiInputBuffer[i]);
+        // }
+        // Serial.println();
         Serial.flush();
       }
       if (_frameReady) {

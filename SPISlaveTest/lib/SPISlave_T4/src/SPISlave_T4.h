@@ -39,9 +39,11 @@ SPISlave_T4_CLASS class SPISlave_T4 : public SPISlave_T4_Base {
     void onReceive(_SPI_ptr handler) { _spihandler = handler; }
     bool active();
     bool available();
-
-    // Is there a byte waiting to be read from the receive FIFO?
-    bool isByteAvailable();
+    // Get the contents of the status register - useful for snapshotting at the beginning of an interrupt handler
+    u_int32_t getStatus();
+    // Is there a byte waiting to be read from the receive FIFO? If status is supplied, then extracts the information from the supplied status
+    bool isDataAvailable();
+    bool isDataAvailable(u_int32_t status);
 
     // bool isTransmitError();
     void sniffer(bool enable = 1);
@@ -55,7 +57,7 @@ SPISlave_T4_CLASS class SPISlave_T4 : public SPISlave_T4_Base {
     int _portnum = 0;
     uint32_t nvic_irq = 0;
     uint32_t transmit_errors = 0;
-    uint32_t _ierTriggerMode = LPSPI_IER_RDIE; // Default to triggering on any data received
+    uint32_t _ierTriggerMode = 0;
     bool sniffer_enabled = 0;
 };
 

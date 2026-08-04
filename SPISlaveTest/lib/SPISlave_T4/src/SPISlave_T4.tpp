@@ -25,6 +25,8 @@ SPISlave_T4_FUNC SPISlave_T4_OPT::SPISlave_T4() {
     _portnum = 3;
     // Enable the LPSI4 clock
     CCM_CCGR1 |= CCM_CCGR1_LPSPI4(CCM_CCGR_ON);
+    // Default to triggering on any data available or data required
+    _ierTriggerMode = LPSPI_IER_RDIE | LPSPI_IER_TDIE;
     nvic_irq = 32 + _portnum;
     _VectorsRam[16 + nvic_irq] = lpspi4_slave_isr;
 
@@ -76,11 +78,19 @@ SPISlave_T4_FUNC void SPISlave_T4_OPT::sniffer(bool enable) {
   }
 }
 
-SPISlave_T4_FUNC bool SPISlave_T4_OPT::isByteAvailable() {
+SPISlave_T4_FUNC u_int32_t SPISlave_T4_OPT::getStatus() {
   SLAVE_PORT_ADDR;
-  return (SLAVE_SR & LPSPI_SR_RDF);
+  return SLAVE_SR;
 }
 
+SPISlave_T4_FUNC bool SPISlave_T4_OPT::isDataAvailable() {
+  SLAVE_PORT_ADDR;
+  return isDataAvailable(SLAVE_SR);
+}
+
+SPISlave_T4_FUNC bool SPISlave_T4_OPT::isDataAvailable(u_int32_t status) {
+  return (status & LPSPI_SR_RDF);
+}
 
 SPISlave_T4_FUNC bool SPISlave_T4_OPT::active() {
   SLAVE_PORT_ADDR;
@@ -106,9 +116,9 @@ SPISlave_T4_FUNC void SPISlave_T4_OPT::pushr(uint32_t data) {
 
 SPISlave_T4_FUNC uint32_t SPISlave_T4_OPT::popr() {
   SLAVE_PORT_ADDR;
-  uint32_t data = SLAVE_RDR;
-  SLAVE_SR = (1UL << 8); /* Clear WCF */
-  return data;
+  // uint32_t data = SLAVE_RDR;
+  // SLAVE_SR = (1UL << 8); /* Clear WCF */
+  return SLAVE_RDR;
 }
 
 
@@ -142,7 +152,7 @@ SPISlave_T4_FUNC void SPISlave_T4_OPT::SLAVE_ISR() {
 
 SPISlave_T4_FUNC void SPISlave_T4_OPT::setIERTriggerMode(bool anyData, bool frameComplete) {
   SLAVE_PORT_ADDR;
-  _ierTriggerMode = anyData ? LPSPI_IER_RDIE : 0;
+  _ierTriggerMode = anyData ? LPSPI_IER_RDIE | LPSPI_IER_TDIE : 0;
   _ierTriggerMode |= frameComplete ? LPSPI_IER_FCIE : 0;
   SLAVE_IER = _ierTriggerMode;
 }
@@ -154,8 +164,7 @@ SPISlave_T4_FUNC void SPISlave_T4_OPT::begin() {
   SLAVE_CR = LPSPI_CR_RST; /* Reset Module */
   SLAVE_CR = 0; /* Disable Module */
   SLAVE_FCR = 0;//x10001; /* 1x watermark for RX and TX */
-  // BUG FIX: SLAVE_IER was incorrectly set to trigger on TDIE
-  // Note: This could also be set to trigger on word or frame ready if useful
+  // BUG FIX: SLAVE_IER was incorrectly set to trigger on TDIE only
   SLAVE_IER = _ierTriggerMode; /* RX Interrupt */
   SLAVE_CFGR0 = 0;
   SLAVE_CFGR1 = 0;
