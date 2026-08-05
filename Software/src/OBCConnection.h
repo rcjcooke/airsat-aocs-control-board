@@ -26,7 +26,7 @@ class OBCConnection {
   explicit OBCConnection(bool spiDebug = false,
                          uint8_t payloadSize = static_cast<uint8_t>(sizeof(CommandPayload)));
 
-  void initialize();
+  void begin();
   bool hasNewCommand() const;
   CommandPayload takeLatestCommand();
   void updateTelemetry(const TelemetryPayload& telemetry);

@@ -1,34 +1,48 @@
 #include <Arduino.h>
+#include <ACAN_T4.h>
+
 #include "OBCConnection.h"
 #include "ReactionWheel.h"
 
 OBCConnection obcConnection;
-ReactionWheel wheelController(1);
 
+// Define 1 Mbps arbitration and 5 Mbps data rate for CAN-FD bus speed
+ACAN_T4FD_Settings canSettings(1000000, DataBitRateFactor::x5);
+
+ReactionWheel wheelController(ACAN_T4::can3, canSettings, 1); 
 TelemetryPayload currentTelemetry;
 CommandPayload workingCommand;
 
 void setup() {
-  Serial.begin(115200);
 
+  // Spin up the Serial interface for debug (10 second timeout)
+  Serial.begin(115200);
   unsigned long timeout = millis();
   while (!Serial && (millis() - timeout < 10000)) {}
-
   if (Serial) {
     delay(1000);
     Serial.println("[main] Serial terminal connected");
     Serial.flush();
   }
 
+  // Set up initial parameters
   currentTelemetry.momentum = 0.0f;
   currentTelemetry.propellant = 1000; 
 
-  // 1. Initialize the SPI Link FIRST while DMA tables are completely clear
+  // Spin up the OBC Link (SPI)
   Serial.println("[main] Initialising OBC SPI Link...");
   Serial.flush();
-  obcConnection.initialize();
+  obcConnection.begin();
 
-  // 2. Safely create and initialize the Reaction Wheel module SECOND
+  // Spin up CAN interface
+  const uint32_t errorCode = ACAN_T4::can3.beginFD(canSettings);
+  if (errorCode != 0) {
+    Serial.printf("Teensy CAN3 Hardware Failed: 0x%X\r\n", errorCode);
+    // TODO: Handle errors better than this!!!
+    while (1);
+  }
+
+  // Spin up the reaction wheel controller (CAN)
   Serial.println("[main] Initialising Reaction Wheel Controller...");
   Serial.flush();
   wheelController.begin();

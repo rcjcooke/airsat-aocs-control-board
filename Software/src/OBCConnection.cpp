@@ -14,7 +14,7 @@ OBCConnection::OBCConnection(bool spiDebug, uint8_t payloadSize)
   s_instance = this;
 }
 
-void OBCConnection::initialize() {
+void OBCConnection::begin() {
   noInterrupts();
   m_newCommandReady = false;
   memset(&m_verifiedCommand, 0, sizeof(m_verifiedCommand));
