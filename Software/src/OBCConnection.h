@@ -4,6 +4,7 @@
 #include <Arduino.h>
 
 #include "SPIConnection.h"
+#include "AOCSControllerTelemetry.h"
 
 #pragma pack(push, 1)
 struct CommandPayload {
@@ -13,6 +14,7 @@ struct CommandPayload {
   uint8_t alignment_pad;  
 }; // Total Size: 22 bytes
 
+// TODO: Fix this up with the right data and make it more efficient
 struct TelemetryPayload {
   float momentum;       // 4 bytes
   uint16_t propellant;  // 2 bytes
@@ -29,14 +31,15 @@ class OBCConnection {
   void begin();
   bool hasNewCommand() const;
   CommandPayload takeLatestCommand();
-  void updateTelemetry(const TelemetryPayload& telemetry);
+  void updateTelemetry(const AOCSControllerTelemetry& telemetry);
 
-  uint16_t rxErrorCount() const;
+  bool isConnected() const;
+  uint8_t rxErrorCount() const;
   uint32_t totalBytesReceived() const;
-  uint32_t totalInterruptsReceived() const;
-  uint32_t syncDropCount() const;
-  uint32_t commandCount() const;
-  uint32_t noOpCount() const;
+  uint8_t syncDropCount() const;
+  uint8_t commandCount() const;
+  uint8_t noOpCount() const;
+  uint8_t malformedFrameCount() const;
   void copyLastRxPayload(uint8_t* destinationBuffer, size_t maxBytes) const;
 
  private:
@@ -53,8 +56,9 @@ class OBCConnection {
   volatile bool m_newCommandReady;
   CommandPayload m_verifiedCommand;
   TelemetryPayload m_telemetryPayload;
-  uint32_t m_commandCount;
-  uint32_t m_noOpCount;
+  uint8_t m_commandCount;
+  uint8_t m_noOpCount;
+  uint8_t m_malformedFrame;
 };
 
 #endif

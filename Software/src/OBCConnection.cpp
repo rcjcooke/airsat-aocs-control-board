@@ -10,7 +10,8 @@ OBCConnection::OBCConnection(bool spiDebug, uint8_t payloadSize)
       m_verifiedCommand{},
       m_telemetryPayload{},
       m_commandCount(0),
-      m_noOpCount(0) {
+      m_noOpCount(0),
+      m_malformedFrame(0) {
   s_instance = this;
 }
 
@@ -39,37 +40,42 @@ CommandPayload OBCConnection::takeLatestCommand() {
   return command;
 }
 
-void OBCConnection::updateTelemetry(const TelemetryPayload& telemetry) {
+void OBCConnection::updateTelemetry(const AOCSControllerTelemetry& telemetry) {
+  // Create a new telemetry payload based on the provided AOCSControllerTelemetry data
+  TelemetryPayload obcTelemetry;
+  obcTelemetry.momentum = telemetry.wheelStoredAngularMomentumKGM2S;
+  obcTelemetry.propellant = static_cast<uint16_t>(telemetry.thrustersPropellantRemainingM3 * 1000.0f); // Convert to milliliters
+  obcTelemetry.error_count = rxErrorCount();
+
+  // Switch it over
   noInterrupts();
-  m_telemetryPayload = telemetry;
-  m_telemetryPayload.error_count = rxErrorCount();
+  m_telemetryPayload = obcTelemetry;
   interrupts();
 
   queueTelemetryPayload();
 }
 
-uint16_t OBCConnection::rxErrorCount() const {
-  const SPIConnection::Stats stats = m_spiConnection.statsSnapshot();
-  return static_cast<uint16_t>(stats.checksumFailureCount + stats.partialFrameErrorCount);
+bool OBCConnection::isConnected() const {
+  return m_spiConnection.state() == SPIConnection::State::Transceiving;
+}
+
+uint8_t OBCConnection::rxErrorCount() const {
+  return m_malformedFrame + m_spiConnection.checksumFailureCount();
 }
 
 uint32_t OBCConnection::totalBytesReceived() const {
-  return m_spiConnection.statsSnapshot().totalBytesReceived;
+  return m_spiConnection.totalBytesReceived();
 }
 
-uint32_t OBCConnection::totalInterruptsReceived() const {
-  return m_spiConnection.statsSnapshot().interruptCalls;
+uint8_t OBCConnection::syncDropCount() const {
+  return m_spiConnection.syncDropCount();
 }
 
-uint32_t OBCConnection::syncDropCount() const {
-  return m_spiConnection.statsSnapshot().syncDropCount;
-}
-
-uint32_t OBCConnection::commandCount() const {
+uint8_t OBCConnection::commandCount() const {
   return m_commandCount;
 }
 
-uint32_t OBCConnection::noOpCount() const {
+uint8_t OBCConnection::noOpCount() const {
   return m_noOpCount;
 }
 
@@ -101,6 +107,8 @@ void OBCConnection::onPayloadReceived(const uint8_t* payload, uint8_t payloadSiz
     m_commandCount++;
   } else if (incomingPayload.flags == 0x22) {
     m_noOpCount++;
+  } else {
+    m_malformedFrame++;
   }
 }
 

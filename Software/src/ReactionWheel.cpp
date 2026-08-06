@@ -2,77 +2,131 @@
 #include <ACAN_T4.h>
 
 ReactionWheel::ReactionWheel(ACAN_T4& canHardware, const ACAN_T4FD_Settings& settings, uint8_t moteusID)
-  : _canBus(canHardware, settings), 
-    _moteus(_canBus, [moteusID]() {
+  : m_canBus(canHardware, settings), 
+    m_moteus(m_canBus, [moteusID]() {
       Moteus::Options options;
       options.id = moteusID;
       return options;
     }()),
-    _targetVelocity(0.0f), _accelLimit(0.0f), _lastMessageTime(0), _connected(false) {}
+    m_target(), 
+    m_lastCommanded(), 
+    m_targetTorqueNm(0.0f), 
+    m_status(), 
+    m_lastMessageTime(0), 
+    m_noControlTimeManagement(true) {}
 
 void ReactionWheel::begin() {
   // Test contact with the physical controller by sending a Stop instruction
-  _connected = _moteus.SetStop(); 
-  if (_connected) {
-    _lastMessageTime = millis();
+  bool success = m_moteus.SetStop(); 
+  if (success) {
+    m_lastMessageTime = millis();
+    m_status.rwMode = RWMode::kRunning;
+    m_status.rwFault = RWFault::kNoFault;
+  } else {
+    m_status.rwMode = RWMode::kFault;
+    m_status.rwFault = RWFault::kCommunicationError;
   }
 }
 
 void ReactionWheel::setTargetTorque(float requestedTorqueNm) {
+  m_targetTorqueNm = requestedTorqueNm;
+
   float targetAlphaRadSS = requestedTorqueNm / Constants::WHEEL_INERTIA;
-  _accelLimit = abs(targetAlphaRadSS * Constants::RAD_S_TO_HZ);
-  
   float rawTargetVelocityHz = (requestedTorqueNm >= 0.0f) 
                               ? Constants::MAX_SPEED_HZ 
                               : -Constants::MAX_SPEED_HZ;
                               
-  _targetVelocity = constrain(rawTargetVelocityHz, -Constants::MAX_SPEED_HZ, Constants::MAX_SPEED_HZ);
+  m_target.accelerationLimit = abs(targetAlphaRadSS * Constants::RAD_S_TO_HZ);
+  m_target.targetVelocity = constrain(rawTargetVelocityHz, -Constants::MAX_SPEED_HZ, Constants::MAX_SPEED_HZ);
+
 }
 
 float ReactionWheel::getAngularVelocity() const { 
-  return _moteus.last_result().values.velocity; 
+  return m_status.angularVelocityHz;
 }
 
 float ReactionWheel::getAngularMomentum() const {
-  float velocityRadS = _moteus.last_result().values.velocity * Constants::HZ_TO_RAD_S;
-  return Constants::WHEEL_INERTIA * velocityRadS;
+  return m_status.angularMomentumKGM2S;
 }
 
-uint8_t ReactionWheel::getModeState() const { 
-  return static_cast<uint8_t>(_moteus.last_result().values.mode); 
+float ReactionWheel::getTargetAngularAcceleration() const {
+  return m_target.accelerationLimit * Constants::HZ_TO_RAD_S;
 }
 
-uint8_t ReactionWheel::getFaultCode() const { 
-  return _moteus.last_result().values.fault; 
+float ReactionWheel::getTargetTorque() const {
+  return m_targetTorqueNm;
 }
 
-bool ReactionWheel::isConnected() const { 
-  return _connected; 
+ReactionWheel::RWStatus ReactionWheel::status() const {
+  return m_status;
 }
 
 void ReactionWheel::update() {
   static uint32_t sendTimer = 0;
+  static uint32_t pollTimer = 0;
   
-  if (millis() - sendTimer >= Constants::CONTROL_PERIOD_MS) { 
+  // Only send a new command if it has been long enough since the last command (unless we're not managing that)
+  if (m_noControlTimeManagement || millis() - sendTimer >= Constants::CONTROL_PERIOD_MS) { 
     sendTimer = millis();
 
-    Moteus::PositionMode::Command cmd;
-    cmd.position = NaN;
-    cmd.velocity = _targetVelocity;
-    cmd.velocity_limit = Constants::MAX_SPEED_CAP_HZ; 
-    cmd.accel_limit = _accelLimit;
+    auto isEqualWithinTolerance = [](float a, float b, float tolerance) {
+      return fabs(a - b) <= tolerance;
+    };
 
-    // Evaluates direct bus response instantly
-    if (_moteus.SetPosition(cmd)) {
-      _lastMessageTime = millis();
-      _connected = true;
+    // Check to see whether the latest target is different within the controllers precision
+    if (!isEqualWithinTolerance(m_target.targetVelocity, m_lastCommanded.targetVelocity, Constants::VELOCITY_TOLERANCE_MSS) || 
+        !isEqualWithinTolerance(m_target.accelerationLimit, m_lastCommanded.accelerationLimit, Constants::ACCELERATION_TOLERANCE_MSS)) {
+
+      // Update the last commanded values
+      m_lastCommanded.targetVelocity = m_target.targetVelocity;
+      m_lastCommanded.accelerationLimit = m_target.accelerationLimit;
+      
+      // Use the Moteus acceleration limit for AirSat torque control
+      Moteus::PositionMode::Command cmd;
+      cmd.position = std::numeric_limits<double>::quiet_NaN();
+      cmd.velocity = m_lastCommanded.targetVelocity;
+      cmd.velocity_limit = Constants::MAX_SPEED_CAP_HZ; 
+      cmd.accel_limit = m_lastCommanded.accelerationLimit;
+
+      // Using Begin rather than Set to avoid blocking calls.
+      m_moteus.BeginPosition(cmd);
+      
+    }
+  }
+
+  // Get the latest status from the motor controller, but only if it has been long enough since the last poll
+  if (millis() - pollTimer >= Constants::UPDATE_PERIOD_MS) { 
+    pollTimer = millis();
+
+    // Get the current motor status
+    if (m_moteus.Poll()) {
+      m_lastMessageTime = millis();
+      const Moteus::Query::Result v = m_moteus.last_result().values;
+      parseMoteusStatus(m_status, v);
     } else {
-      _connected = false;
+      m_status.rwMode = RWMode::kFault;
+      m_status.rwFault = RWFault::kCommunicationError;
     }
   }
 
   // Backup hardware timing link dropout watchdog
-  if (millis() - _lastMessageTime > Constants::TIMEOUT_MS) { 
-    _connected = false;
+  if (millis() - m_lastMessageTime > Constants::TIMEOUT_MS) { 
+    m_status.rwMode = RWMode::kFault;
+    m_status.rwFault = RWFault::kCommunicationError;
   }
 }
+
+void ReactionWheel::parseMoteusStatus(RWStatus& status, const Moteus::Query::Result& v) {
+  status.angularVelocityHz = v.velocity;
+  status.angularMomentumKGM2S = Constants::WHEEL_INERTIA * v.velocity * Constants::HZ_TO_RAD_S;
+  status.motorControllerMode = static_cast<uint8_t>(v.mode);
+  status.motorControllerFaultCode = v.fault;
+  if (v.mode == mjbots::moteus::Mode::kFault) {
+    status.rwMode = RWMode::kFault;
+    status.rwFault = RWFault::kMoteusFault;
+  } else {
+    status.rwMode = RWMode::kRunning;
+    status.rwFault = RWFault::kNoFault;
+  }
+}
+
