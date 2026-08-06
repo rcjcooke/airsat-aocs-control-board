@@ -121,11 +121,6 @@ void loop() {
   if (millis() - diagnosticTimer >= 1000) {
     diagnosticTimer = millis();
 
-    if (wheelController.status().rwMode != ReactionWheel::RWMode::kRunning) {
-      Serial.printf("[main] [CRITICAL] Reaction Wheel Fault! Fault Code: 0x%02X | Mode: %d\r\n", 
-                    static_cast<uint8_t>(wheelController.status().rwFault), static_cast<uint8_t>(wheelController.status().rwMode));
-    }
-
     uint8_t rxPayloadSnapshot[sizeof(CommandPayload)] = {0};
     obcConnection.copyLastRxPayload(rxPayloadSnapshot, sizeof(rxPayloadSnapshot));
 
@@ -135,11 +130,12 @@ void loop() {
                   obcConnection.noOpCount(),
                   obcConnection.rxErrorCount(), 
                   obcConnection.syncDropCount());
-    Serial.printf("[main] [RW ] Stored Momentum: %f | Target Acceleration: %f | Mode: %s | Fault: %s\r\n",
+    Serial.printf("[main] [RW ] Stored Momentum: %.3f Kg.m²/s | Target Torque: %.3f Nm | Target Acceleration: %.3f rad/s² | Mode: %s | Fault: %s\r\n",
                   wheelController.getAngularMomentum(),
+                  wheelController.getTargetTorque(),
                   wheelController.getTargetAngularAcceleration(),
-                  reactionWheelModeToString(wheelController.status().rwMode),
-                  reactionWheelFaultToString(wheelController.status().rwFault));
+                  reactionWheelModeToString(wheelController.status().rwMode).c_str(),
+                  reactionWheelFaultToString(wheelController.status().rwFault).c_str());
     
     // Serial.printf("[main] [OBC] Last RX payload (%u bytes): ", static_cast<unsigned>(sizeof(rxPayloadSnapshot)));
     // for (size_t i = 0; i < sizeof(rxPayloadSnapshot); ++i) {

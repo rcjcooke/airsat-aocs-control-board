@@ -47,18 +47,19 @@ class OBCConnection {
   static constexpr uint8_t kNoOpFrame = 0x22;
 
   static OBCConnection* s_instance;
-  static void onPayloadReceivedCallback(const uint8_t* payload, uint8_t payloadSize);
+  static void onPayloadReceivedCallbackISR(const uint8_t* payload, uint8_t payloadSize);
 
-  void onPayloadReceived(const uint8_t* payload, uint8_t payloadSize);
+  void onPayloadReceivedISR(const uint8_t* payload, uint8_t payloadSize);
   void queueTelemetryPayload();
 
   SPIConnection m_spiConnection;
-  volatile bool m_newCommandReady;
   CommandPayload m_verifiedCommand;
   TelemetryPayload m_telemetryPayload;
-  uint8_t m_commandCount;
-  uint8_t m_noOpCount;
-  uint8_t m_malformedFrame;
+
+  volatile bool m_newCommandReady;
+  volatile uint8_t m_commandCount;
+  volatile uint8_t m_noOpCount;
+  volatile uint8_t m_malformedFrame;
 };
 
 #endif

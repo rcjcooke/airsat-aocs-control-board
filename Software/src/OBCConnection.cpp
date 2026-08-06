@@ -6,9 +6,9 @@ OBCConnection* OBCConnection::s_instance = nullptr;
 
 OBCConnection::OBCConnection(bool spiDebug, uint8_t payloadSize)
     : m_spiConnection(spiDebug, payloadSize),
-      m_newCommandReady(false),
       m_verifiedCommand{},
       m_telemetryPayload{},
+      m_newCommandReady(false),
       m_commandCount(0),
       m_noOpCount(0),
       m_malformedFrame(0) {
@@ -22,7 +22,7 @@ void OBCConnection::begin() {
   memset(&m_telemetryPayload, 0, sizeof(m_telemetryPayload));
   interrupts();
 
-  m_spiConnection.setPayloadReadyHandler(onPayloadReceivedCallback);
+  m_spiConnection.setPayloadReadyHandler(onPayloadReceivedCallbackISR);
   queueTelemetryPayload();
   m_spiConnection.begin();
 }
@@ -32,12 +32,8 @@ bool OBCConnection::hasNewCommand() const {
 }
 
 CommandPayload OBCConnection::takeLatestCommand() {
-  CommandPayload command;
-  noInterrupts();
-  command = m_verifiedCommand;
   m_newCommandReady = false;
-  interrupts();
-  return command;
+  return m_verifiedCommand;
 }
 
 void OBCConnection::updateTelemetry(const AOCSControllerTelemetry& telemetry) {
@@ -87,13 +83,13 @@ void OBCConnection::copyLastRxPayload(uint8_t* destinationBuffer, size_t maxByte
   m_spiConnection.copyLastRxPayload(destinationBuffer, maxBytes);
 }
 
-void OBCConnection::onPayloadReceivedCallback(const uint8_t* payload, uint8_t payloadSize) {
+void OBCConnection::onPayloadReceivedCallbackISR(const uint8_t* payload, uint8_t payloadSize) {
   if (s_instance != nullptr) {
-    s_instance->onPayloadReceived(payload, payloadSize);
+    s_instance->onPayloadReceivedISR(payload, payloadSize);
   }
 }
 
-void OBCConnection::onPayloadReceived(const uint8_t* payload, uint8_t payloadSize) {
+void OBCConnection::onPayloadReceivedISR(const uint8_t* payload, uint8_t payloadSize) {
   if (payload == nullptr || payloadSize != sizeof(CommandPayload)) {
     return;
   }
