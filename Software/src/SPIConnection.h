@@ -16,15 +16,18 @@ class SPIConnection {
 
   using PayloadReadyHandler = void (*)(const uint8_t* payload, uint8_t payloadSize);
 
+  enum class State : uint8_t {
+    Idle,
+    Syncing,
+    Transceiving
+  };
+
   struct Stats {
     uint32_t interruptCalls;
     uint32_t lastByteReceived;
     uint32_t totalBytesReceived;
     uint32_t totalFramesReceived;
-    uint32_t checksumFailureCount;
-    uint32_t syncDropCount;
     uint32_t bytesLostSyncing;
-    uint32_t partialFrameErrorCount;
     uint32_t bytesReceivedInLastInterrupt;
     uint32_t fcfsReceived;
     uint32_t txErrorCount;
@@ -39,15 +42,14 @@ class SPIConnection {
 
   uint8_t payloadSize() const;
   uint8_t frameSize() const;
+  uint32_t totalBytesReceived() const;
+  uint8_t syncDropCount() const;
+  uint8_t checksumFailureCount() const;
+  
   Stats statsSnapshot() const;
+  State state() const;
 
  private:
-  enum class State : uint8_t {
-    Idle,
-    Syncing,
-    Transceiving
-  };
-
   static constexpr uint8_t kSyncByte0 = 0xAA;
   static constexpr uint8_t kSyncByte1 = 0x55;
 
@@ -76,10 +78,9 @@ class SPIConnection {
   volatile uint32_t m_lastByteReceived;
   volatile uint32_t m_totalBytesReceived;
   volatile uint32_t m_totalFramesReceived;
-  volatile uint32_t m_checksumFailureCount;
-  volatile uint32_t m_syncDropCount;
+  volatile uint8_t m_checksumFailureCount;
+  volatile uint8_t m_syncDropCount;
   volatile uint32_t m_bytesLostSyncing;
-  volatile uint32_t m_partialFrameErrorCount;
   volatile uint32_t m_bytesReceivedInLastInterrupt;
   volatile bool m_uncheckedInterruptDebugData;
   volatile uint32_t m_fcfsReceived;

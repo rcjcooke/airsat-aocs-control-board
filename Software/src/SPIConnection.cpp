@@ -38,7 +38,6 @@ SPIConnection::SPIConnection(bool debugEnabled, uint8_t payloadSize)
       m_checksumFailureCount(0),
       m_syncDropCount(0),
       m_bytesLostSyncing(0),
-      m_partialFrameErrorCount(0),
       m_bytesReceivedInLastInterrupt(0),
       m_uncheckedInterruptDebugData(false),
       m_fcfsReceived(0),
@@ -99,6 +98,24 @@ uint8_t SPIConnection::frameSize() const {
   return m_frameSize;
 }
 
+uint32_t SPIConnection::totalBytesReceived() const {
+  uint32_t totalBytes = 0;
+  noInterrupts();
+  totalBytes = m_totalBytesReceived;
+  interrupts();
+  return totalBytes;
+}
+
+uint8_t SPIConnection::syncDropCount() const {
+  // 8-bit so no need for protection with interrupts
+  return m_syncDropCount;
+}
+
+uint8_t SPIConnection::checksumFailureCount() const {
+  // 8-bit so no need for protection with interrupts
+  return m_checksumFailureCount;
+}
+
 SPIConnection::Stats SPIConnection::statsSnapshot() const {
   noInterrupts();
   const Stats snapshot = {
@@ -106,15 +123,17 @@ SPIConnection::Stats SPIConnection::statsSnapshot() const {
       m_lastByteReceived,
       m_totalBytesReceived,
       m_totalFramesReceived,
-      m_checksumFailureCount,
-      m_syncDropCount,
       m_bytesLostSyncing,
-      m_partialFrameErrorCount,
       m_bytesReceivedInLastInterrupt,
       m_fcfsReceived,
       m_txErrorCount};
   interrupts();
   return snapshot;
+}
+
+SPIConnection::State SPIConnection::state() const {
+  // 8-bit so no need for protection with interrupts
+  return m_state;
 }
 
 uint16_t SPIConnection::calculateFletcher16(const uint8_t* data, size_t count) {
@@ -211,7 +230,6 @@ void SPIConnection::handleMessage() {
         ++m_syncDropCount;
         ++m_bytesLostSyncing;
         m_spiBufferIndex = 0;
-        ++m_partialFrameErrorCount;
       } else {
         m_spiInputBuffer[m_spiBufferIndex] = rxData;
         ++m_spiBufferIndex;
