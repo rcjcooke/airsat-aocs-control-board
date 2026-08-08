@@ -16,6 +16,8 @@ ReactionWheel wheelController(ACAN_T4::can3, canSettings, 1);
 // Current system telemetry
 AOCSControllerTelemetry currentTelemetry;
 
+// UTILITY METHODS
+
 String reactionWheelModeToString(ReactionWheel::RWMode mode) {
   switch (mode) {
     case ReactionWheel::RWMode::kStopped:
@@ -41,6 +43,8 @@ String reactionWheelFaultToString(ReactionWheel::RWFault fault) {
       return "Unknown";
   }
 }
+
+// MAIN FLOW
 
 void setup() {
 
@@ -85,7 +89,7 @@ void setup() {
 void loop() {
   // Run sub-system loops
   wheelController.update();
-
+  
   // Action any new instructions from the OBC
   if (obcConnection.hasNewCommand()) {
     CommandPayload workingCommand = obcConnection.takeLatestCommand();
@@ -94,7 +98,7 @@ void loop() {
     currentTelemetry.aocsTargetTorqueNM = wheelController.getTargetTorque();
   }
 
-    // Local telemetry refresh
+  // Local telemetry refresh
   static uint32_t telemetryTimer = 0;
   if (millis() - telemetryTimer >= 100) { 
     telemetryTimer = millis();

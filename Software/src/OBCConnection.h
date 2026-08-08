@@ -1,3 +1,4 @@
+// TODO: Add a timeout on the OBC connection
 #ifndef OBC_CONNECTION_H
 #define OBC_CONNECTION_H
 
