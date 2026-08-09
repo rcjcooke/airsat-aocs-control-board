@@ -209,8 +209,26 @@ void SPIConnection::handleMessage() {
     m_bytesReceivedInLastInterrupt = 0;
   }
 
+  if (LPSPI4_SR & LPSPI_SR_FCF) {
+    // Hardware Frame Complete Flag just asserted (CS went High - i.e. frame complete)
+    LPSPI4_SR = LPSPI_SR_FCF; // Clear flag
+    ++m_fcfsReceived;
+
+    // Update the output buffer to the next frame to transmit.
+    memcpy((void*)m_spiOutputBuffer, (const void*)m_nextTxFrame, m_frameSize);
+    // Force reset tracking pointers so the next frame starts immediately
+    m_spiBufferIndex = 0;
+    m_frameSynced = false;
+
+    // Pre-load the absolute first sync byte (0xAA) into the hardware register
+    // So it sits on the physical MISO pin BEFORE the Pi drops CS low again
+    LPSPI4_TDR = m_spiOutputBuffer[0];
+  }
+
   while (g_spi.isDataAvailable()) {
-    const uint8_t rxData = static_cast<uint8_t>(g_spi.popr());
+    uint32_t rawRegValue = g_spi.popr();
+    const uint8_t rxData = static_cast<uint8_t>(rawRegValue & 0xFF); // Mask strictly to the bottom 8 bits
+
     m_lastByteReceived = rxData;
     ++m_totalBytesReceived;
 
@@ -266,12 +284,14 @@ void SPIConnection::handleMessage() {
   }
 
   if (LPSPI4_SR & LPSPI_SR_TDF) {
-    uint8_t txIdx = static_cast<uint8_t>(m_spiBufferIndex + 1);
-    if (txIdx >= m_frameSize) {
-      memcpy((void*)m_spiOutputBuffer, (const void*)m_nextTxFrame, m_frameSize);
-      txIdx = 0;
+    // nextTxIndex tracks the exact byte offset we need to stage next
+    uint8_t nextTxIndex = m_spiBufferIndex; 
+    
+    if (nextTxIndex < m_frameSize) {
+      LPSPI4_TDR = m_spiOutputBuffer[nextTxIndex];
+    } else {
+      LPSPI4_TDR = 0x00; // Fallback padding
     }
-    LPSPI4_TDR = m_spiOutputBuffer[txIdx];
   }
 
   if (LPSPI4_SR & LPSPI_SR_TEF) {
@@ -280,11 +300,6 @@ void SPIConnection::handleMessage() {
   }
 
   m_uncheckedInterruptDebugData = true;
-
-  if (LPSPI4_SR & LPSPI_SR_FCF) {
-    LPSPI4_SR = LPSPI_SR_FCF;
-    ++m_fcfsReceived;
-  }
 
   if (LPSPI4_SR & LPSPI_SR_WCF) {
     LPSPI4_SR = LPSPI_SR_WCF;
