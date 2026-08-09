@@ -85,6 +85,9 @@ void setup() {
   Serial.println("[main] Initialising Reaction Wheel Controller...");
   Serial.flush();
   wheelController.begin();
+
+  // Finally - start processing OBC messages once we know everything is up and running
+  obcConnection.activateSPI();
   
   if (wheelController.status().rwMode != ReactionWheel::RWMode::kRunning) {
     Serial.println("[main] [WARN] Reaction Wheel offline at startup validation check.");
