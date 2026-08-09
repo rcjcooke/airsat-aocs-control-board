@@ -222,36 +222,49 @@ void SPIConnection::handleMessage() {
 
     if (!m_frameSynced) {
       m_state = State::Syncing;
-      if (m_spiBufferIndex == 0 && rxData == kSyncByte0) {
-        m_spiInputBuffer[m_spiBufferIndex] = rxData;
-        m_spiBufferIndex = 1;
-      } else if (m_spiBufferIndex == 1 && rxData == kSyncByte1) {
-        m_spiInputBuffer[m_spiBufferIndex] = rxData;
-        m_spiBufferIndex = 2;
-        m_frameSynced = true;
-      } else {
-        ++m_bytesLostSyncing;
-        m_spiBufferIndex = 0;
-      }
-    } else {
-      m_state = State::Transceiving;
-      const bool syncMismatch =
-          (m_spiBufferIndex == 0 && rxData != kSyncByte0) ||
-          (m_spiBufferIndex == 1 && rxData != kSyncByte1);
-
-      if (syncMismatch) {
-        m_frameSynced = false;
-        ++m_syncDropCount;
-        ++m_bytesLostSyncing;
-        m_spiBufferIndex = 0;
-      } else {
-        m_spiInputBuffer[m_spiBufferIndex] = rxData;
-        ++m_spiBufferIndex;
-
-        if (m_spiBufferIndex >= m_frameSize) {
-          validateAndDispatchFrame();
-          m_spiBufferIndex = 0;
+      
+      if (m_spiBufferIndex == 0) {
+        if (rxData == kSyncByte0) {
+          m_spiInputBuffer[0] = rxData;
+          m_spiBufferIndex = 1;
         }
+        // If it's not SyncByte0, we stay at index 0 and keep hunting
+      } 
+      else if (m_spiBufferIndex == 1) {
+        if (rxData == kSyncByte1) {
+          m_spiInputBuffer[m_spiBufferIndex] = rxData;
+          m_spiBufferIndex = 2;
+          m_frameSynced = true; // Lock into the frame transmission
+        } else {
+          // We saw SyncByte0, but the next byte was NOT SyncByte1.
+          // This is a verified sync failure.
+          ++m_syncDropCount; 
+          ++m_bytesLostSyncing;
+          
+          // Re-evaluate this failed byte. If it happens to be another SyncByte0,
+          // keep our index at 1. Otherwise, reset back to hunting.
+          if (rxData == kSyncByte0) {
+            m_spiInputBuffer[0] = rxData;
+            m_spiBufferIndex = 1;
+          } else {
+            m_spiBufferIndex = 0;
+          }
+        }
+      }
+    } 
+    else {
+      // TRANSCEIVING STATE: Rely purely on counting bytes until the packet finishes
+      m_state = State::Transceiving;
+      m_spiInputBuffer[m_spiBufferIndex] = rxData;
+      ++m_spiBufferIndex;
+
+      if (m_spiBufferIndex >= m_frameSize) {
+        // Entire packet size reached. Validate the Fletcher16 checksum.
+        validateAndDispatchFrame(); 
+        
+        // Reset state pointers for the next payload hunt
+        m_spiBufferIndex = 0;
+        m_frameSynced = false; 
       }
     }
   }
