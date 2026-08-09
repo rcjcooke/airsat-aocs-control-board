@@ -229,10 +229,9 @@ void SPIConnection::handleMessage() {
           m_spiBufferIndex = 1;
         }
         // If it's not SyncByte0, we stay at index 0 and keep hunting
-      } 
-      else if (m_spiBufferIndex == 1) {
+      } else if (m_spiBufferIndex == 1) {
         if (rxData == kSyncByte1) {
-          m_spiInputBuffer[m_spiBufferIndex] = rxData;
+          m_spiInputBuffer[1] = rxData;
           m_spiBufferIndex = 2;
           m_frameSynced = true; // Lock into the frame transmission
         } else {
@@ -251,8 +250,7 @@ void SPIConnection::handleMessage() {
           }
         }
       }
-    } 
-    else {
+    } else {
       // TRANSCEIVING STATE: Rely purely on counting bytes until the packet finishes
       m_state = State::Transceiving;
       m_spiInputBuffer[m_spiBufferIndex] = rxData;
