@@ -135,7 +135,7 @@ void loop() {
     uint8_t rxPayloadSnapshot[sizeof(CommandPayload)] = {0};
     obcConnection.copyLastRxPayload(rxPayloadSnapshot, sizeof(rxPayloadSnapshot));
 
-    Serial.printf("[main] [OBC] Link state: %s | Commands RX: %lu | No-Ops RX: %lu | RX errors: %u | Sync drops: %lu\r\n",
+    Serial.printf("[main] [OBC] Link state: %s | Commands RX: %u | No-Ops RX: %u | RX errors: %u | Sync drops: %u\r\n",
                   obcConnection.isConnected() ? "Connected" : "DISCONNECTED",
                   obcConnection.commandCount(),
                   obcConnection.noOpCount(),
