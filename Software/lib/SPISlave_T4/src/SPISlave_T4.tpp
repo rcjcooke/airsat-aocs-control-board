@@ -174,5 +174,5 @@ SPISlave_T4_FUNC void SPISlave_T4_OPT::begin() {
   SLAVE_TCR_REFRESH;
   SLAVE_TDR = 0x0; /* dummy data, must populate initial TX slot */
   NVIC_ENABLE_IRQ(nvic_irq);
-  NVIC_SET_PRIORITY(nvic_irq, 1);
+  NVIC_SET_PRIORITY(nvic_irq, 144);
 }
