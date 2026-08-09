@@ -178,8 +178,11 @@ void SPIConnection::validateAndDispatchFrame() {
 
   memcpy((void*)m_lastRxPayload, (const void*)&m_spiInputBuffer[kSyncSize], m_payloadSize);
 
-  if (m_payloadReadyHandler != nullptr) {
-    m_payloadReadyHandler((const uint8_t*)m_lastRxPayload, m_payloadSize);
+  // SAFE COPY TO PREVENT NULLPTR FAULTS:
+  PayloadReadyHandler handlerCopy = (PayloadReadyHandler) m_payloadReadyHandler;
+
+  if (handlerCopy != nullptr) {
+    handlerCopy((const uint8_t*)m_lastRxPayload, m_payloadSize);
   }
 
   ++m_totalFramesReceived;

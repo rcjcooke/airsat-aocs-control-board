@@ -86,7 +86,7 @@ class SPIConnection {
   volatile uint32_t m_fcfsReceived;
   volatile uint32_t m_txErrorCount;
 
-  PayloadReadyHandler m_payloadReadyHandler;
+  volatile PayloadReadyHandler m_payloadReadyHandler;
 
   static SPIConnection* s_instance;
 };
