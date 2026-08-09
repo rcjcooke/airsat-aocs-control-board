@@ -64,7 +64,6 @@ void SPIConnection::begin() {
 
   if (m_debugEnabled) {
     Serial.println("[SPI] [DEBUG] Transport initialised");
-    Serial.flush();
   }
 }
 
@@ -72,7 +71,6 @@ void SPIConnection::activate() {
   m_isActive = true;
   if (m_debugEnabled) {
     Serial.println("[SPI] [DEBUG] Message processing activated");
-    Serial.flush();
   }
 }
 
@@ -313,7 +311,6 @@ void SPIConnection::printTCRRegisterDetail() const {
   Serial.printf("[SPI] [DEBUG]   PCS: %u   | LSBF: %u  | BYSW: %u\r\n", pcs, lsbf, bysw);
   Serial.printf("[SPI] [DEBUG]   CONT: %u  | CONTC: %u | RXMSK: %u | TXMSK: %u\r\n", cont, contc, rxmsk, txmsk);
   Serial.printf("[SPI] [DEBUG]   WIDTH: %u | FRAMESZ: %u\r\n", width, framesz);
-  Serial.flush();
 }
 
 void SPIConnection::printSRRegisterDetail() const {
@@ -347,7 +344,6 @@ void SPIConnection::printSRRegisterDetail() const {
     Serial.printf("MBF ");
   }
   Serial.printf("\r\n");
-  Serial.flush();
 }
 
 void SPIConnection::printFSRRegisterDetail() const {
@@ -357,7 +353,6 @@ void SPIConnection::printFSRRegisterDetail() const {
   const uint32_t rxCount = (LPSPI4_FSR & LPSPI_FSR_RXCOUNT(0x1F)) / LPSPI_FSR_RXCOUNT(1);
 
   Serial.printf("[SPI] [DEBUG]   TXCOUNT: %u | RXCOUNT: %u\r\n", txCount, rxCount);
-  Serial.flush();
 }
 
 void SPIConnection::printRSRRegisterDetail() const {
@@ -367,7 +362,6 @@ void SPIConnection::printRSRRegisterDetail() const {
   const uint32_t rxEmpty = (LPSPI4_RSR & LPSPI_RSR_RXEMPTY) ? 1U : 0U;
 
   Serial.printf("[SPI] [DEBUG]   SOF: %u | RXEMPTY: %u\r\n", startOfFrame, rxEmpty);
-  Serial.flush();
 }
 
 void SPIConnection::printSPIParameterRegister() const {
@@ -377,7 +371,6 @@ void SPIConnection::printSPIParameterRegister() const {
   const uint32_t txFifoSize = LPSPI4_PARAM & 0xFF;
 
   Serial.printf("[SPI] [DEBUG]   RX MAX FIFO SIZE: %u | TX MAX FIFO SIZE: %u\r\n", 1U << rxFifoSize, 1U << txFifoSize);
-  Serial.flush();
 }
 
 void SPIConnection::printFCRRegisterDetail() const {
@@ -387,7 +380,6 @@ void SPIConnection::printFCRRegisterDetail() const {
   const uint32_t txWatermark = (LPSPI4_FCR & LPSPI_FCR_TXWATER(0x0F)) / LPSPI_FCR_TXWATER(1);
 
   Serial.printf("[SPI] [DEBUG]   RX WATERMARK: %u | TX WATERMARK: %u\r\n", rxWatermark, txWatermark);
-  Serial.flush();
 }
 
 void SPIConnection::printIERRegisterDetail() const {
@@ -420,7 +412,6 @@ void SPIConnection::printIERRegisterDetail() const {
   }
 
   Serial.printf("\r\n");
-  Serial.flush();
 }
 
 void SPIConnection::printCFGR1RegisterDetail() const {
@@ -453,7 +444,6 @@ void SPIConnection::printCFGR1RegisterDetail() const {
                 pinConfig,
                 outConfig,
                 pcsConfig);
-  Serial.flush();
 }
 
 void SPIConnection::spiRegisterAudit() const {
@@ -521,5 +511,4 @@ void SPIConnection::spiRegisterAudit() const {
   printFCRRegisterDetail();
 
   Serial.println("=========================================================================");
-  Serial.flush();
 }

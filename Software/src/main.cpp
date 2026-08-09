@@ -72,7 +72,6 @@ void setup() {
 
   // Spin up the OBC Link (SPI)
   Serial.println("[main] Initialising OBC SPI Link...");
-  Serial.flush();
   obcConnection.begin();
 
   // Spin up CAN interface
@@ -85,7 +84,6 @@ void setup() {
 
   // Spin up the reaction wheel controller (CAN)
   Serial.println("[main] Initialising Reaction Wheel Controller...");
-  Serial.flush();
   wheelController.begin();
 
   // Finally - start processing OBC messages once we know everything is up and running
@@ -154,11 +152,22 @@ void loop() {
       obcConnection.spiConnection().printSRRegisterDetail();
       obcConnection.spiConnection().printFSRRegisterDetail();
       obcConnection.spiConnection().printRSRRegisterDetail();
-      
+
+      SPIConnection::Stats spiStats = obcConnection.spiConnection().statsSnapshot();
+      Serial.printf("[main] [SPI] [DEBUG] SPI Stats: Interrupt Calls: %u | Last Byte RX: %u | Total Bytes RX: %u | Total Frames RX: %u | Bytes Lost Syncing: %u | Bytes RX in Last Interrupt: %u | FCFS Received: %u | TX Errors: %u\r\n",
+                    spiStats.interruptCalls,
+                    spiStats.lastByteReceived,
+                    spiStats.totalBytesReceived,
+                    spiStats.totalFramesReceived,
+                    spiStats.bytesLostSyncing,
+                    spiStats.bytesReceivedInLastInterrupt,
+                    spiStats.fcfsReceived,
+                    spiStats.txErrorCount);
+
       uint8_t rxPayloadSnapshot[sizeof(CommandPayload)] = {0};
       obcConnection.copyLastRxPayload(rxPayloadSnapshot, sizeof(rxPayloadSnapshot));
 
-      Serial.printf("[main] [OBC] Last RX payload (%u bytes): ", static_cast<unsigned>(sizeof(rxPayloadSnapshot)));
+      Serial.printf("[main] [SPI] [DEBUG] Last RX payload (%u bytes): ", static_cast<unsigned>(sizeof(rxPayloadSnapshot)));
       for (size_t i = 0; i < sizeof(rxPayloadSnapshot); ++i) {
         Serial.printf("%02X ", rxPayloadSnapshot[i]);
       }
