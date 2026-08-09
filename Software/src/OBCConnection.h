@@ -43,6 +43,7 @@ class OBCConnection {
   uint8_t noOpCount() const;
   uint8_t malformedFrameCount() const;
   void copyLastRxPayload(uint8_t* destinationBuffer, size_t maxBytes) const;
+  SPIConnection& spiConnection();
 
  private:
   static constexpr uint8_t kCommandFrame = 0x11;

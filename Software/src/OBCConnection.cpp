@@ -97,6 +97,10 @@ void OBCConnection::copyLastRxPayload(uint8_t* destinationBuffer, size_t maxByte
   m_spiConnection.copyLastRxPayload(destinationBuffer, maxBytes);
 }
 
+SPIConnection& OBCConnection::spiConnection() {
+  return m_spiConnection;
+}
+
 void OBCConnection::onPayloadReceivedCallbackISR(const uint8_t* payload, uint8_t payloadSize) {
   OBCConnection* localInstance = (OBCConnection*)s_instance;
   
