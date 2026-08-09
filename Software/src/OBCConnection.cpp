@@ -32,8 +32,12 @@ bool OBCConnection::hasNewCommand() const {
 }
 
 CommandPayload OBCConnection::takeLatestCommand() {
+  noInterrupts(); // Stop SPI interrupts from breaking the copy
+  CommandPayload localCopy = m_verifiedCommand;
   m_newCommandReady = false;
-  return m_verifiedCommand;
+  interrupts();   // Safe to resume interrupts
+  
+  return localCopy;
 }
 
 void OBCConnection::updateTelemetry(const AOCSControllerTelemetry& telemetry) {
@@ -68,11 +72,17 @@ uint8_t OBCConnection::syncDropCount() const {
 }
 
 uint8_t OBCConnection::commandCount() const {
-  return m_commandCount;
+  noInterrupts();
+  uint8_t count = m_commandCount;
+  interrupts();
+  return count;
 }
 
 uint8_t OBCConnection::noOpCount() const {
-  return m_noOpCount;
+  noInterrupts();
+  uint8_t count = m_noOpCount;
+  interrupts();
+  return count;
 }
 
 void OBCConnection::copyLastRxPayload(uint8_t* destinationBuffer, size_t maxBytes) const {
