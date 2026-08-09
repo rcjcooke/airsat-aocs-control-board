@@ -50,6 +50,16 @@ class SPIConnection {
   Stats statsSnapshot() const;
   State state() const;
 
+  void printTCRRegisterDetail() const;
+  void printSRRegisterDetail() const;
+  void printFSRRegisterDetail() const;
+  void printRSRRegisterDetail() const;
+  void printSPIParameterRegister() const;
+  void printFCRRegisterDetail() const;
+  void printIERRegisterDetail() const;
+  void printCFGR1RegisterDetail() const;
+  void spiRegisterAudit() const;
+
  private:
   static constexpr uint8_t kSyncByte0 = 0xAA;
   static constexpr uint8_t kSyncByte1 = 0x55;

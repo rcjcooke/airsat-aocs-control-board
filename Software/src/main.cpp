@@ -5,8 +5,10 @@
 #include "OBCConnection.h"
 #include "ReactionWheel.h"
 
+#define SPI_DEBUG true
+
 // The connection to the OBC (SPI)
-OBCConnection obcConnection;
+OBCConnection obcConnection = OBCConnection(SPI_DEBUG);
 
 // CAN bus settings: 1 Mbps arbitration and 5 Mbps data rate for CAN-FD bus speed
 ACAN_T4FD_Settings canSettings(1000000, DataBitRateFactor::x5);
@@ -135,9 +137,6 @@ void loop() {
   if (millis() - diagnosticTimer >= 1000) {
     diagnosticTimer = millis();
 
-    uint8_t rxPayloadSnapshot[sizeof(CommandPayload)] = {0};
-    obcConnection.copyLastRxPayload(rxPayloadSnapshot, sizeof(rxPayloadSnapshot));
-
     Serial.printf("[main] [OBC] Link state: %s | Commands RX: %u | No-Ops RX: %u | RX errors: %u | Sync drops: %u\r\n",
                   obcConnection.isConnected() ? "Connected" : "DISCONNECTED",
                   obcConnection.commandCount(),
@@ -150,12 +149,21 @@ void loop() {
                   wheelController.getTargetAngularAcceleration(),
                   reactionWheelModeToString(wheelController.status().rwMode).c_str(),
                   reactionWheelFaultToString(wheelController.status().rwFault).c_str());
-    
-    // Serial.printf("[main] [OBC] Last RX payload (%u bytes): ", static_cast<unsigned>(sizeof(rxPayloadSnapshot)));
-    // for (size_t i = 0; i < sizeof(rxPayloadSnapshot); ++i) {
-    //   Serial.printf("%02X ", rxPayloadSnapshot[i]);
-    // }
-    // Serial.println();
 
+    if (SPI_DEBUG) {
+      obcConnection.spiConnection().printSRRegisterDetail();
+      obcConnection.spiConnection().printFSRRegisterDetail();
+      obcConnection.spiConnection().printRSRRegisterDetail();
+      
+      uint8_t rxPayloadSnapshot[sizeof(CommandPayload)] = {0};
+      obcConnection.copyLastRxPayload(rxPayloadSnapshot, sizeof(rxPayloadSnapshot));
+
+      Serial.printf("[main] [OBC] Last RX payload (%u bytes): ", static_cast<unsigned>(sizeof(rxPayloadSnapshot)));
+      for (size_t i = 0; i < sizeof(rxPayloadSnapshot); ++i) {
+        Serial.printf("%02X ", rxPayloadSnapshot[i]);
+      }
+      Serial.println();
+    }
+    
   }
 }
