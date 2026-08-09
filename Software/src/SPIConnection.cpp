@@ -21,7 +21,8 @@ uint8_t clampPayloadSize(uint8_t requestedPayloadSize) {
 SPIConnection* SPIConnection::s_instance = nullptr;
 
 SPIConnection::SPIConnection(bool debugEnabled, uint8_t payloadSize)
-    : m_debugEnabled(debugEnabled),
+    : m_isActive(false),
+      m_debugEnabled(debugEnabled),
       m_payloadSize(clampPayloadSize(payloadSize)),
       m_frameSize(static_cast<uint8_t>(m_payloadSize + kFrameOverhead)),
       m_state(State::Idle),
@@ -53,6 +54,7 @@ void SPIConnection::begin() {
   m_spiBufferIndex = 0;
   m_frameSynced = false;
   m_uncheckedInterruptDebugData = false;
+  m_isActive = false;
 
   memcpy((void*)m_spiOutputBuffer, (const void*)m_nextTxFrame, m_frameSize);
 
@@ -62,6 +64,14 @@ void SPIConnection::begin() {
 
   if (m_debugEnabled) {
     Serial.println("[SPI] Transport initialised");
+    Serial.flush();
+  }
+}
+
+void SPIConnection::activate() {
+  m_isActive = true;
+  if (m_debugEnabled) {
+    Serial.println("[SPI] Message processing activated");
     Serial.flush();
   }
 }
@@ -178,11 +188,12 @@ void SPIConnection::validateAndDispatchFrame() {
 
   memcpy((void*)m_lastRxPayload, (const void*)&m_spiInputBuffer[kSyncSize], m_payloadSize);
 
-  // SAFE COPY TO PREVENT NULLPTR FAULTS:
-  PayloadReadyHandler handlerCopy = (PayloadReadyHandler) m_payloadReadyHandler;
-
-  if (handlerCopy != nullptr) {
-    handlerCopy((const uint8_t*)m_lastRxPayload, m_payloadSize);
+  if (m_isActive) {
+    // SAFE COPY TO PREVENT NULLPTR FAULTS:
+    PayloadReadyHandler handlerCopy = (PayloadReadyHandler) m_payloadReadyHandler;
+    if (handlerCopy != nullptr) {
+      handlerCopy((const uint8_t*)m_lastRxPayload, m_payloadSize);
+    }
   }
 
   ++m_totalFramesReceived;

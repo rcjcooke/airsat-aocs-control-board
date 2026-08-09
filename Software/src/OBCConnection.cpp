@@ -2,7 +2,7 @@
 
 #include <string.h>
 
-OBCConnection* OBCConnection::s_instance = nullptr;
+volatile OBCConnection* OBCConnection::s_instance = nullptr;
 
 OBCConnection::OBCConnection(bool spiDebug, uint8_t payloadSize)
     : m_spiConnection(spiDebug, payloadSize),
@@ -25,6 +25,10 @@ void OBCConnection::begin() {
   m_spiConnection.setPayloadReadyHandler(onPayloadReceivedCallbackISR);
   queueTelemetryPayload();
   m_spiConnection.begin();
+}
+
+void OBCConnection::activateSPI() {
+  m_spiConnection.activate();
 }
 
 bool OBCConnection::hasNewCommand() const {
@@ -94,8 +98,10 @@ void OBCConnection::copyLastRxPayload(uint8_t* destinationBuffer, size_t maxByte
 }
 
 void OBCConnection::onPayloadReceivedCallbackISR(const uint8_t* payload, uint8_t payloadSize) {
-  if (s_instance != nullptr) {
-    s_instance->onPayloadReceivedISR(payload, payloadSize);
+  OBCConnection* localInstance = (OBCConnection*)s_instance;
+  
+  if (localInstance != nullptr) {
+    localInstance->onPayloadReceivedISR(payload, payloadSize);
   }
 }
 

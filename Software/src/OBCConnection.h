@@ -30,6 +30,7 @@ class OBCConnection {
                          uint8_t payloadSize = static_cast<uint8_t>(sizeof(CommandPayload)));
 
   void begin();
+  void activateSPI();
   bool hasNewCommand() const;
   CommandPayload takeLatestCommand();
   void updateTelemetry(const AOCSControllerTelemetry& telemetry);
@@ -47,7 +48,7 @@ class OBCConnection {
   static constexpr uint8_t kCommandFrame = 0x11;
   static constexpr uint8_t kNoOpFrame = 0x22;
 
-  static OBCConnection* s_instance;
+  static volatile OBCConnection* s_instance;
   static void onPayloadReceivedCallbackISR(const uint8_t* payload, uint8_t payloadSize);
 
   void onPayloadReceivedISR(const uint8_t* payload, uint8_t payloadSize);

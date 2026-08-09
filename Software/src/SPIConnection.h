@@ -36,6 +36,7 @@ class SPIConnection {
   explicit SPIConnection(bool debugEnabled, uint8_t payloadSize = kDefaultPayloadSize);
 
   void begin();
+  void activate();
   void setPayloadReadyHandler(PayloadReadyHandler handler);
   void setNextTxPayload(const uint8_t* payload, size_t payloadSize);
   void copyLastRxPayload(uint8_t* destination, size_t maxBytes) const;
@@ -59,6 +60,8 @@ class SPIConnection {
   void handleMessage();
   void buildTxFrameFromPayload(const uint8_t* payload, size_t payloadSize);
   void validateAndDispatchFrame();
+
+  volatile bool m_isActive = false;
 
   bool m_debugEnabled;
   uint8_t m_payloadSize;
