@@ -52,6 +52,13 @@ void setup() {
   Serial.begin(115200);
   unsigned long timeout = millis();
   while (!Serial && (millis() - timeout < 10000)) {}
+
+  // If there's a previous crash report we want to know about it
+  if (CrashReport) {
+    Serial.print(CrashReport);
+    while(1); // Freeze here so you can read exactly what caused the crash!
+  }
+
   if (Serial) {
     delay(1000);
     Serial.println("[main] Serial terminal connected");
