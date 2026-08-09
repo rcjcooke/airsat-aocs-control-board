@@ -152,9 +152,14 @@ void loop() {
       obcConnection.spiConnection().printSRRegisterDetail();
       obcConnection.spiConnection().printFSRRegisterDetail();
       obcConnection.spiConnection().printRSRRegisterDetail();
+      SPIConnection::State spiState = obcConnection.spiConnection().state();
+      Serial.printf("[main] [SPI] [DEBUG] SPI State: %s\r\n", 
+                    (spiState == SPIConnection::State::Idle) ? "Idle" : 
+                    (spiState == SPIConnection::State::Syncing) ? "Syncing" : 
+                    (spiState == SPIConnection::State::Transceiving) ? "Transceiving" : "Unknown");
 
       SPIConnection::Stats spiStats = obcConnection.spiConnection().statsSnapshot();
-      Serial.printf("[main] [SPI] [DEBUG] SPI Stats: Interrupt Calls: %u | Last Byte RX: %u | Total Bytes RX: %u | Total Frames RX: %u | Bytes Lost Syncing: %u | Bytes RX in Last Interrupt: %u | FCFS Received: %u | TX Errors: %u\r\n",
+      Serial.printf("[main] [SPI] [DEBUG] Interrupt Calls: %u | Last Byte RX: %u | Total Bytes RX: %u | Total Frames RX: %u | Bytes Lost Syncing: %u | Bytes RX in Last Interrupt: %u | FCFS Received: %u | TX Errors: %u\r\n",
                     spiStats.interruptCalls,
                     spiStats.lastByteReceived,
                     spiStats.totalBytesReceived,
