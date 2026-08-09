@@ -35,13 +35,23 @@ SPISlave_T4_FUNC SPISlave_T4_OPT::SPISlave_T4() {
     IOMUXC_LPSPI4_SDI_SELECT_INPUT = 0x0; /* SDI_SELECT_INPUT */
     IOMUXC_LPSPI4_SDO_SELECT_INPUT = 0x0; /* SDO_SELECT_INPUT */
     IOMUXC_LPSPI4_SCK_SELECT_INPUT = 0x0; /* SCK_SELECT_INPUT */
-    IOMUXC_SW_MUX_CTL_PAD_GPIO_B0_00 = 0x3; /* LPSPI4 PCS0 (CS) - Chip Select driven from Master*/
+    IOMUXC_SW_MUX_CTL_PAD_GPIO_B0_00 = 0x3; /* LPSPI4 PCS0 (CS) - Chip Select driven from Master */
     IOMUXC_SW_MUX_CTL_PAD_GPIO_B0_01 = 0x3; /* LPSPI4 SDI (MISO) - MOSI from Master */
-    IOMUXC_SW_MUX_CTL_PAD_GPIO_B0_02 = 0x3; /* LPSPI4 SDO (MOSI) - MISO from Master */
+    IOMUXC_SW_MUX_CTL_PAD_GPIO_B0_02 = 0x3; /* LPSPI4 SDO (MOSI) - MISO to Master */
     IOMUXC_SW_MUX_CTL_PAD_GPIO_B0_03 = 0x3; /* LPSPI4 SCK (CLK) - Clock driven from Master */
 
-    // Add the pullup on the CS pin to avoid spurious interrupts when the master is idle
-    pinMode(10, INPUT_PULLUP);
+    // Pin 10 (CS): 22k Internal Pull-Up, Hysteresis Enabled (0x0001B0B0)
+    IOMUXC_SW_PAD_CTL_PAD_GPIO_B0_00 = 0x0001B0B0;
+    // Pin 12 (SDI / MISO: MOSI from Master):100k Internal Pull-Down, Hysteresis Enabled
+    // This fixes the listening pin's noise floor!
+    IOMUXC_SW_PAD_CTL_PAD_GPIO_B0_01 = 0x000130B0;
+    // Pin 11 (SDI/ MOSI: MISO to Master): No Pulls, Max Drive Strength, Fast Slew Rate
+    // This ensures sharp response edges back to the Raspberry Pi.
+    IOMUXC_SW_PAD_CTL_PAD_GPIO_B0_02 = 0x000010B0;
+    // Pin 13 (CLK / SCK): 100k Internal Pull-Down, Hysteresis Enabled (0x000130B0)
+    // Critical: Prevents CAN-FD switching noise from being interpreted as extra clock pulses.
+    IOMUXC_SW_PAD_CTL_PAD_GPIO_B0_03 = 0x000130B0;
+
   } 
 }
 
