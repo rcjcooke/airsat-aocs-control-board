@@ -2,22 +2,29 @@
 #include <ACAN_T4.h>
 
 ReactionWheel::ReactionWheel(ACAN_T4& canHardware, const ACAN_T4FD_Settings& settings, uint8_t moteusID)
-  : m_canBus(canHardware, settings), 
-    m_moteus(m_canBus, [moteusID]() {
-      Moteus::Options options;
-      options.id = moteusID;
-      return options;
-    }()),
+  : m_canBus(nullptr), 
+    m_moteus(nullptr),
+    m_canHardwareRef(canHardware),
+    m_canSettingsRef(settings),
+    m_moteusID(moteusID),
     m_target(), 
     m_lastCommanded(), 
-    m_targetTorqueNm(0.0f), 
+    m_targetTorqueNm(0.0f),
+    m_noControlTimeManagement(true), 
     m_status(), 
-    m_lastMessageTime(0), 
-    m_noControlTimeManagement(true) {}
+    m_lastMessageTime(0) {}
 
 void ReactionWheel::begin() {
-  // Test contact with the physical controller by sending a Stop instruction
-  bool success = m_moteus.SetStop(); 
+  // Construct the CAN interface
+  m_canBus = new MoteusTeensyCanFD(m_canHardwareRef, m_canSettingsRef);
+
+  // Construct the Moteus instance
+  Moteus::Options options;
+  options.id = m_moteusID;
+  m_moteus = new Moteus(*m_canBus, options);
+
+  // Test contact with the physical controller
+  bool success = m_moteus->SetStop(); 
   if (success) {
     m_lastMessageTime = millis();
     m_status.rwMode = RWMode::kRunning;
@@ -62,6 +69,10 @@ ReactionWheel::RWStatus ReactionWheel::status() const {
 }
 
 void ReactionWheel::update() {
+
+  // Just in case
+  if (m_moteus == nullptr) return; 
+
   static uint32_t sendTimer = 0;
   static uint32_t pollTimer = 0;
   
@@ -89,7 +100,7 @@ void ReactionWheel::update() {
       cmd.accel_limit = m_lastCommanded.accelerationLimit;
 
       // Using Begin rather than Set to avoid blocking calls.
-      m_moteus.BeginPosition(cmd);
+      m_moteus->BeginPosition(cmd);
       
     }
   }
@@ -99,9 +110,9 @@ void ReactionWheel::update() {
     pollTimer = millis();
 
     // Get the current motor status
-    if (m_moteus.Poll()) {
+    if (m_moteus->Poll()) {
       m_lastMessageTime = millis();
-      const Moteus::Query::Result v = m_moteus.last_result().values;
+      const Moteus::Query::Result v = m_moteus->last_result().values;
       parseMoteusStatus(m_status, v);
     } else {
       m_status.rwMode = RWMode::kFault;

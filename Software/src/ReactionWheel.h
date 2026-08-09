@@ -67,8 +67,11 @@ private:
   void parseMoteusStatus(ReactionWheel::RWStatus& status, const Moteus::Query::Result& v);
 
   // Underlying hardware
-  MoteusTeensyCanFD   m_canBus;
-  Moteus              m_moteus;
+  MoteusTeensyCanFD* m_canBus;
+  Moteus* m_moteus;
+  ACAN_T4& m_canHardwareRef;
+  const ACAN_T4FD_Settings& m_canSettingsRef;
+  uint8_t m_moteusID;
 
   // Control parameters
   ControlParams m_target;
