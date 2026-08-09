@@ -171,10 +171,17 @@ void loop() {
 
       uint8_t rxPayloadSnapshot[sizeof(CommandPayload)] = {0};
       obcConnection.copyLastRxPayload(rxPayloadSnapshot, sizeof(rxPayloadSnapshot));
+      uint8_t txFrameSnapshot[26] = {0}; 
+      obcConnection.spiConnection().copyLastTxFrame(txFrameSnapshot, sizeof(txFrameSnapshot));
 
       Serial.printf("[main] [SPI] [DEBUG] Last RX payload (%u bytes): ", static_cast<unsigned>(sizeof(rxPayloadSnapshot)));
       for (size_t i = 0; i < sizeof(rxPayloadSnapshot); ++i) {
         Serial.printf("%02X ", rxPayloadSnapshot[i]);
+      }
+      Serial.println();
+      Serial.printf("[main] [SPI] [DEBUG] Scheduled TX Frame: ");
+      for (size_t i = 0; i < sizeof(txFrameSnapshot); ++i) {
+        Serial.printf("%02X ", txFrameSnapshot[i]);
       }
       Serial.println();
     }
