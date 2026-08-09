@@ -40,6 +40,7 @@ class SPIConnection {
   void setPayloadReadyHandler(PayloadReadyHandler handler);
   void setNextTxPayload(const uint8_t* payload, size_t payloadSize);
   void copyLastRxPayload(uint8_t* destination, size_t maxBytes) const;
+  void copyLastTxFrame(uint8_t* destination, size_t maxBytes) const;
 
   uint8_t payloadSize() const;
   uint8_t frameSize() const;

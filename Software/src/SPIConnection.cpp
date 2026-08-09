@@ -58,7 +58,7 @@ void SPIConnection::begin() {
 
   memcpy((void*)m_spiOutputBuffer, (const void*)m_nextTxFrame, m_frameSize);
 
-  g_spi.setIERTriggerMode(true, false);
+  g_spi.setIERTriggerMode(true, true);
   g_spi.begin();
   g_spi.onReceive(handleMessageISR);
 
@@ -95,6 +95,15 @@ void SPIConnection::copyLastRxPayload(uint8_t* destination, size_t maxBytes) con
 
   noInterrupts();
   memcpy(destination, (const void*)m_lastRxPayload, boundedSize);
+  interrupts();
+}
+
+void SPIConnection::copyLastTxFrame(uint8_t* destination, size_t maxBytes) const {
+  if (destination == nullptr || maxBytes == 0) return;
+  const size_t boundedSize = (maxBytes < m_frameSize) ? maxBytes : m_frameSize;
+  
+  noInterrupts();
+  memcpy(destination, (const void*)m_spiOutputBuffer, boundedSize);
   interrupts();
 }
 
@@ -208,26 +217,34 @@ void SPIConnection::handleMessage() {
   if (!m_uncheckedInterruptDebugData) {
     m_bytesReceivedInLastInterrupt = 0;
   }
-
+  // 1. HARDWARE FRAME COMPLETE EVENT (CS lifted HIGH)
   if (LPSPI4_SR & LPSPI_SR_FCF) {
-    // Hardware Frame Complete Flag just asserted (CS went High - i.e. frame complete)
     LPSPI4_SR = LPSPI_SR_FCF; // Clear flag
     ++m_fcfsReceived;
 
-    // Update the output buffer to the next frame to transmit.
+    // Pull the next telemetry payload snapshot into the active workspace safely
     memcpy((void*)m_spiOutputBuffer, (const void*)m_nextTxFrame, m_frameSize);
-    // Force reset tracking pointers so the next frame starts immediately
+    
+    // Clear indices for the incoming receiver tracking engine
     m_spiBufferIndex = 0;
     m_frameSynced = false;
 
-    // Pre-load the absolute first sync byte (0xAA) into the hardware register
-    // So it sits on the physical MISO pin BEFORE the Pi drops CS low again
-    LPSPI4_TDR = m_spiOutputBuffer[0];
+    // Reset the hardware transmit FIFO to clear out stale underflow data
+    LPSPI4_CR |= LPSPI_CR_RTF; 
+
+    // DIRECT HARDWARE BURST:
+    // Fill the Teensy's deep 4-byte silicon FIFO queue completely.
+    // This pre-loads the first 4 bytes of your frame (AA 55 00 00 ...) into the hardware.
+    // They sit directly in silicon registers waiting for the Pi's clock.
+    for (uint8_t i = 0; i < 4 && i < m_frameSize; ++i) {
+      LPSPI4_TDR = m_spiOutputBuffer[i];
+    }
   }
 
+  // 2. RECEIVER DATA DISPATCH BLOCK
   while (g_spi.isDataAvailable()) {
     uint32_t rawRegValue = g_spi.popr();
-    const uint8_t rxData = static_cast<uint8_t>(rawRegValue & 0xFF); // Mask strictly to the bottom 8 bits
+    const uint8_t rxData = static_cast<uint8_t>(rawRegValue & 0xFF); 
 
     m_lastByteReceived = rxData;
     ++m_totalBytesReceived;
@@ -235,29 +252,22 @@ void SPIConnection::handleMessage() {
     if (!m_uncheckedInterruptDebugData) {
       ++m_bytesReceivedInLastInterrupt;
     }
-
+    // RUN THE RECEIVE STATE MACHINE
     if (!m_frameSynced) {
       m_state = State::Syncing;
-      
       if (m_spiBufferIndex == 0) {
         if (rxData == kSyncByte0) {
           m_spiInputBuffer[0] = rxData;
           m_spiBufferIndex = 1;
         }
-        // If it's not SyncByte0, we stay at index 0 and keep hunting
       } else if (m_spiBufferIndex == 1) {
         if (rxData == kSyncByte1) {
           m_spiInputBuffer[1] = rxData;
           m_spiBufferIndex = 2;
-          m_frameSynced = true; // Lock into the frame transmission
+          m_frameSynced = true; 
         } else {
-          // We saw SyncByte0, but the next byte was NOT SyncByte1.
-          // This is a verified sync failure.
-          ++m_syncDropCount; 
+          ++m_syncDropCount;
           ++m_bytesLostSyncing;
-          
-          // Re-evaluate this failed byte. If it happens to be another SyncByte0,
-          // keep our index at 1. Otherwise, reset back to hunting.
           if (rxData == kSyncByte0) {
             m_spiInputBuffer[0] = rxData;
             m_spiBufferIndex = 1;
@@ -267,40 +277,39 @@ void SPIConnection::handleMessage() {
         }
       }
     } else {
-      // TRANSCEIVING STATE: Rely purely on counting bytes until the packet finishes
       m_state = State::Transceiving;
       m_spiInputBuffer[m_spiBufferIndex] = rxData;
+      
+      // STREAMING TRANSMIT FEED:
+      // As the Pi consumes a byte from the FIFO, the Transmit Data Flag (TDF) opens.
+      // We look exactly 4 bytes ahead (+4) to keep the 4-byte deep hardware FIFO full.
+      if (LPSPI4_SR & LPSPI_SR_TDF) {
+        uint8_t nextTxIndex = m_spiBufferIndex + 4;
+        if (nextTxIndex < m_frameSize) {
+          LPSPI4_TDR = m_spiOutputBuffer[nextTxIndex];
+        } else {
+          LPSPI4_TDR = 0x00; // Terminal padding
+        }
+      }
+
       ++m_spiBufferIndex;
 
       if (m_spiBufferIndex >= m_frameSize) {
-        // Entire packet size reached. Validate the Fletcher16 checksum.
         validateAndDispatchFrame(); 
-        
-        // Reset state pointers for the next payload hunt
         m_spiBufferIndex = 0;
         m_frameSynced = false; 
       }
     }
   }
 
-  if (LPSPI4_SR & LPSPI_SR_TDF) {
-    // nextTxIndex tracks the exact byte offset we need to stage next
-    uint8_t nextTxIndex = m_spiBufferIndex; 
-    
-    if (nextTxIndex < m_frameSize) {
-      LPSPI4_TDR = m_spiOutputBuffer[nextTxIndex];
-    } else {
-      LPSPI4_TDR = 0x00; // Fallback padding
-    }
-  }
-
+  // 3. ERROR LOG MAINTENANCE
   if (LPSPI4_SR & LPSPI_SR_TEF) {
-    LPSPI4_SR = LPSPI_SR_TEF;
+    LPSPI4_SR = LPSPI_SR_TEF; // Clear transmit error flag
     ++m_txErrorCount;
   }
 
   m_uncheckedInterruptDebugData = true;
-
+  
   if (LPSPI4_SR & LPSPI_SR_WCF) {
     LPSPI4_SR = LPSPI_SR_WCF;
   }
