@@ -165,7 +165,7 @@ SPISlave_T4_FUNC void SPISlave_T4_OPT::SLAVE_ISR() {
 
 SPISlave_T4_FUNC void SPISlave_T4_OPT::setIERTriggerMode(bool anyData, bool frameComplete) {
   SLAVE_PORT_ADDR;
-  _ierTriggerMode = anyData ? LPSPI_IER_RDIE | LPSPI_IER_TDIE : 0;
+  _ierTriggerMode = anyData ? LPSPI_IER_RDIE : 0;
   _ierTriggerMode |= frameComplete ? LPSPI_IER_FCIE : 0;
   SLAVE_IER = _ierTriggerMode;
 }
@@ -176,7 +176,7 @@ SPISlave_T4_FUNC void SPISlave_T4_OPT::begin() {
   SLAVE_PORT_ADDR;
   SLAVE_CR = LPSPI_CR_RST; /* Reset Module */
   SLAVE_CR = 0; /* Disable Module */
-  SLAVE_FCR = 0;//x10001; /* 1x watermark for RX and TX */
+  SLAVE_FCR = 0; // No watermarks - we want to know on 0 bytes both ways
   // BUG FIX: SLAVE_IER was incorrectly set to trigger on TDIE only
   SLAVE_IER = _ierTriggerMode; /* RX Interrupt */
   SLAVE_CFGR0 = 0;
