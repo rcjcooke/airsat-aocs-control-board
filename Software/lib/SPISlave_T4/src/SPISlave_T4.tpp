@@ -39,6 +39,9 @@ SPISlave_T4_FUNC SPISlave_T4_OPT::SPISlave_T4() {
     IOMUXC_SW_MUX_CTL_PAD_GPIO_B0_01 = 0x3; /* LPSPI4 SDI (MISO) - MOSI from Master */
     IOMUXC_SW_MUX_CTL_PAD_GPIO_B0_02 = 0x3; /* LPSPI4 SDO (MOSI) - MISO from Master */
     IOMUXC_SW_MUX_CTL_PAD_GPIO_B0_03 = 0x3; /* LPSPI4 SCK (CLK) - Clock driven from Master */
+
+    // Add the pullup on the CS pin to avoid spurious interrupts when the master is idle
+    pinMode(10, INPUT_PULLUP);
   } 
 }
 
