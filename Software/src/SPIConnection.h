@@ -23,14 +23,16 @@ class SPIConnection {
   };
 
   struct Stats {
-    uint32_t interruptCalls;
+    uint32_t byteRxISRCalls;
+    uint32_t csRisingISRCalls;
     uint32_t lastByteReceived;
     uint32_t totalBytesReceived;
-    uint32_t totalFramesReceived;
+    uint32_t totalPacketsReceived;
     uint32_t bytesLostSyncing;
     uint32_t bytesReceivedInLastInterrupt;
     uint32_t fcfsReceived;
     uint32_t txErrorCount;
+    uint32_t checksumFailureCount;
   };
 
   explicit SPIConnection(bool debugEnabled, uint8_t payloadSize = kDefaultPayloadSize);
@@ -40,13 +42,13 @@ class SPIConnection {
   void setPayloadReadyHandler(PayloadReadyHandler handler);
   void setNextTxPayload(const uint8_t* payload, size_t payloadSize);
   void copyLastRxPayload(uint8_t* destination, size_t maxBytes) const;
-  void copyLastTxFrame(uint8_t* destination, size_t maxBytes) const;
+  void copyOutgoingTxFrame(uint8_t* destination, size_t maxBytes) const;
 
   uint8_t payloadSize() const;
   uint8_t frameSize() const;
   uint32_t totalBytesReceived() const;
   uint8_t syncDropCount() const;
-  uint8_t checksumFailureCount() const;
+  uint32_t checksumFailureCount() const;
   
   Stats statsSnapshot() const;
   State state() const;
@@ -76,22 +78,23 @@ class SPIConnection {
 
   bool m_debugEnabled;
   uint8_t m_payloadSize;
-  uint8_t m_frameSize;
+  uint8_t m_packetSize;
   volatile State m_state;
 
   uint8_t m_spiInputBuffer[kMaxFrameSize];
   uint8_t m_spiOutputBuffer[kMaxFrameSize];
   uint8_t m_spiBufferIndex;
 
-  bool m_frameSynced;
+  bool m_packetSynced;
   volatile uint8_t m_lastRxPayload[kMaxPayloadSize];
 
   uint8_t m_nextTxFrame[kMaxFrameSize];
 
-  volatile uint32_t m_interruptCalls;
+  volatile uint32_t m_byteRxISRCalls;
+  volatile uint32_t m_CSRisingISRCalls;
   volatile uint32_t m_lastByteReceived;
   volatile uint32_t m_totalBytesReceived;
-  volatile uint32_t m_totalFramesReceived;
+  volatile uint32_t m_totalPacketsReceived;
   volatile uint8_t m_checksumFailureCount;
   volatile uint8_t m_syncDropCount;
   volatile uint32_t m_bytesLostSyncing;

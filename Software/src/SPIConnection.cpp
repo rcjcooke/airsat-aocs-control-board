@@ -24,18 +24,18 @@ SPIConnection::SPIConnection(bool debugEnabled, uint8_t payloadSize)
     : m_isActive(false),
       m_debugEnabled(debugEnabled),
       m_payloadSize(clampPayloadSize(payloadSize)),
-      m_frameSize(static_cast<uint8_t>(m_payloadSize + kFrameOverhead)),
+      m_packetSize(static_cast<uint8_t>(m_payloadSize + kFrameOverhead)),
       m_state(State::Idle),
       m_spiInputBuffer{0},
       m_spiOutputBuffer{0},
       m_spiBufferIndex(0),
-      m_frameSynced(false),
+      m_packetSynced(false),
       m_lastRxPayload{0},
       m_nextTxFrame{0},
-      m_interruptCalls(0),
+      m_byteRxISRCalls(0),
       m_lastByteReceived(0),
       m_totalBytesReceived(0),
-      m_totalFramesReceived(0),
+      m_totalPacketsReceived(0),
       m_checksumFailureCount(0),
       m_syncDropCount(0),
       m_bytesLostSyncing(0),
@@ -52,13 +52,13 @@ void SPIConnection::begin() {
 
   m_state = State::Idle;
   m_spiBufferIndex = 0;
-  m_frameSynced = false;
+  m_packetSynced = false;
   m_uncheckedInterruptDebugData = false;
   m_isActive = false;
 
-  memcpy((void*)m_spiOutputBuffer, (const void*)m_nextTxFrame, m_frameSize);
+  memcpy((void*)m_spiOutputBuffer, (const void*)m_nextTxFrame, m_packetSize);
 
-  g_spi.setIERTriggerMode(true, true);
+  g_spi.setIERTriggerMode(true, false);
   g_spi.begin();
   g_spi.onReceive(handleMessageISR);
 
@@ -98,9 +98,9 @@ void SPIConnection::copyLastRxPayload(uint8_t* destination, size_t maxBytes) con
   interrupts();
 }
 
-void SPIConnection::copyLastTxFrame(uint8_t* destination, size_t maxBytes) const {
+void SPIConnection::copyOutgoingTxFrame(uint8_t* destination, size_t maxBytes) const {
   if (destination == nullptr || maxBytes == 0) return;
-  const size_t boundedSize = (maxBytes < m_frameSize) ? maxBytes : m_frameSize;
+  const size_t boundedSize = (maxBytes < m_packetSize) ? maxBytes : m_packetSize;
   
   noInterrupts();
   memcpy(destination, (const void*)m_spiOutputBuffer, boundedSize);
@@ -112,7 +112,7 @@ uint8_t SPIConnection::payloadSize() const {
 }
 
 uint8_t SPIConnection::frameSize() const {
-  return m_frameSize;
+  return m_packetSize;
 }
 
 uint32_t SPIConnection::totalBytesReceived() const {
@@ -128,22 +128,26 @@ uint8_t SPIConnection::syncDropCount() const {
   return m_syncDropCount;
 }
 
-uint8_t SPIConnection::checksumFailureCount() const {
-  // 8-bit so no need for protection with interrupts
-  return m_checksumFailureCount;
+uint32_t SPIConnection::checksumFailureCount() const {
+  noInterrupts();
+  uint32_t count = m_checksumFailureCount;
+  interrupts();
+  return count;
 }
 
 SPIConnection::Stats SPIConnection::statsSnapshot() const {
   noInterrupts();
   const Stats snapshot = {
-      m_interruptCalls,
+      m_byteRxISRCalls,
+      m_CSRisingISRCalls,
       m_lastByteReceived,
       m_totalBytesReceived,
-      m_totalFramesReceived,
+      m_totalPacketsReceived,
       m_bytesLostSyncing,
       m_bytesReceivedInLastInterrupt,
       m_fcfsReceived,
-      m_txErrorCount};
+      m_txErrorCount,
+      m_checksumFailureCount};
   interrupts();
   return snapshot;
 }
@@ -168,7 +172,7 @@ uint16_t SPIConnection::calculateFletcher16(const uint8_t* data, size_t count) {
 void SPIConnection::buildTxFrameFromPayload(const uint8_t* payload, size_t payloadSize) {
   const size_t boundedSize = (payloadSize < m_payloadSize) ? payloadSize : m_payloadSize;
 
-  memset(m_nextTxFrame, 0, m_frameSize);
+  memset(m_nextTxFrame, 0, m_packetSize);
   m_nextTxFrame[0] = kSyncByte0;
   m_nextTxFrame[1] = kSyncByte1;
 
@@ -176,17 +180,17 @@ void SPIConnection::buildTxFrameFromPayload(const uint8_t* payload, size_t paylo
     memcpy(&m_nextTxFrame[kSyncSize], payload, boundedSize);
   }
 
-  const uint16_t checksum = calculateFletcher16(m_nextTxFrame, m_frameSize - kChecksumSize);
-  m_nextTxFrame[m_frameSize - 2] = static_cast<uint8_t>(checksum & 0xFF);
-  m_nextTxFrame[m_frameSize - 1] = static_cast<uint8_t>((checksum >> 8) & 0xFF);
+  const uint16_t checksum = calculateFletcher16(m_nextTxFrame, m_packetSize - kChecksumSize);
+  m_nextTxFrame[m_packetSize - 2] = static_cast<uint8_t>(checksum & 0xFF);
+  m_nextTxFrame[m_packetSize - 1] = static_cast<uint8_t>((checksum >> 8) & 0xFF);
 }
 
 void SPIConnection::validateAndDispatchFrame() {
   const uint16_t calculatedChecksum =
-      calculateFletcher16(m_spiInputBuffer, m_frameSize - kChecksumSize);
+      calculateFletcher16(m_spiInputBuffer, m_packetSize - kChecksumSize);
   const uint16_t receivedChecksum =
-      static_cast<uint16_t>(m_spiInputBuffer[m_frameSize - 2]) |
-      (static_cast<uint16_t>(m_spiInputBuffer[m_frameSize - 1]) << 8);
+      static_cast<uint16_t>(m_spiInputBuffer[m_packetSize - 2]) |
+      (static_cast<uint16_t>(m_spiInputBuffer[m_packetSize - 1]) << 8);
 
   if (calculatedChecksum != receivedChecksum) {
     ++m_checksumFailureCount;
@@ -200,10 +204,9 @@ void SPIConnection::validateAndDispatchFrame() {
     PayloadReadyHandler handlerCopy = (PayloadReadyHandler) m_payloadReadyHandler;
     if (handlerCopy != nullptr) {
       handlerCopy((const uint8_t*)m_lastRxPayload, m_payloadSize);
+      ++m_totalPacketsReceived;
     }
   }
-
-  ++m_totalFramesReceived;
 }
 
 void SPIConnection::handleMessageISR() {
@@ -213,61 +216,61 @@ void SPIConnection::handleMessageISR() {
 }
 
 void SPIConnection::handleMessage() {
-  ++m_interruptCalls;
+  ++m_byteRxISRCalls;
   if (!m_uncheckedInterruptDebugData) {
     m_bytesReceivedInLastInterrupt = 0;
   }
-  // 1. HARDWARE FRAME COMPLETE EVENT (CS lifted HIGH)
-  if (LPSPI4_SR & LPSPI_SR_FCF) {
-    LPSPI4_SR = LPSPI_SR_FCF; // Clear flag
-    ++m_fcfsReceived;
 
-    // Pull the next telemetry payload snapshot into the active workspace safely
-    memcpy((void*)m_spiOutputBuffer, (const void*)m_nextTxFrame, m_frameSize);
-    
-    // Clear indices for the incoming receiver tracking engine
-    m_spiBufferIndex = 0;
-    m_frameSynced = false;
+  // Independent counter to track exactly how many bytes have been clocked
+  // in by the Pi during THIS specific frame transaction window.
+  static uint8_t rawClockCount = 0;
 
-    // Reset the hardware transmit FIFO to clear out stale underflow data
-    LPSPI4_CR |= LPSPI_CR_RTF; 
-
-    // DIRECT HARDWARE BURST:
-    // Fill the Teensy's deep 4-byte silicon FIFO queue completely.
-    // This pre-loads the first 4 bytes of your frame (AA 55 00 00 ...) into the hardware.
-    // They sit directly in silicon registers waiting for the Pi's clock.
-    for (uint8_t i = 0; i < 4 && i < m_frameSize; ++i) {
-      LPSPI4_TDR = m_spiOutputBuffer[i];
-    }
-  }
-
-  // 2. RECEIVER DATA DISPATCH BLOCK
+  // 1. INTEGRATED RX/TX LOOP (RDIE triggered)
   while (g_spi.isDataAvailable()) {
     uint32_t rawRegValue = g_spi.popr();
     const uint8_t rxData = static_cast<uint8_t>(rawRegValue & 0xFF); 
 
     m_lastByteReceived = rxData;
     ++m_totalBytesReceived;
-
     if (!m_uncheckedInterruptDebugData) {
       ++m_bytesReceivedInLastInterrupt;
     }
-    // RUN THE RECEIVE STATE MACHINE
-    if (!m_frameSynced) {
+
+    // THE ABSOLUTE TRANSMIT PIPELINE FEED:
+    // Because we popped an inbound byte, exactly one TX slot has opened.
+    // We base our look-ahead strictly on rawClockCount + 4. This guarantees
+    // the output stream follows a perfect 4, 5, 6, 7... sequence and is 100%
+    // immune to any variable hunting shifts or index resets inside the state machine.
+    uint8_t nextTxIndex = rawClockCount + 4;
+    if (nextTxIndex < m_packetSize) {
+      LPSPI4_TDR = m_spiOutputBuffer[nextTxIndex];
+    } else {
+      LPSPI4_TDR = 0x00; // Terminal padding fallback
+    }
+    
+    // Step our independent transmission counter forward for this byte pulse
+    ++rawClockCount;
+
+    // --- RECEIVE STATE MACHINE (Restored & Safe) ---
+    if (!m_packetSynced) {
       m_state = State::Syncing;
+      
       if (m_spiBufferIndex == 0) {
         if (rxData == kSyncByte0) {
           m_spiInputBuffer[0] = rxData;
           m_spiBufferIndex = 1;
+        } else {
+          ++m_bytesLostSyncing;
         }
       } else if (m_spiBufferIndex == 1) {
         if (rxData == kSyncByte1) {
           m_spiInputBuffer[1] = rxData;
           m_spiBufferIndex = 2;
-          m_frameSynced = true; 
+          m_packetSynced = true; // Lock into active payload collection
         } else {
           ++m_syncDropCount;
           ++m_bytesLostSyncing;
+          
           if (rxData == kSyncByte0) {
             m_spiInputBuffer[0] = rxData;
             m_spiBufferIndex = 1;
@@ -279,40 +282,47 @@ void SPIConnection::handleMessage() {
     } else {
       m_state = State::Transceiving;
       m_spiInputBuffer[m_spiBufferIndex] = rxData;
-      
-      // STREAMING TRANSMIT FEED:
-      // As the Pi consumes a byte from the FIFO, the Transmit Data Flag (TDF) opens.
-      // We look exactly 4 bytes ahead (+4) to keep the 4-byte deep hardware FIFO full.
-      if (LPSPI4_SR & LPSPI_SR_TDF) {
-        uint8_t nextTxIndex = m_spiBufferIndex + 4;
-        if (nextTxIndex < m_frameSize) {
-          LPSPI4_TDR = m_spiOutputBuffer[nextTxIndex];
-        } else {
-          LPSPI4_TDR = 0x00; // Terminal padding
-        }
-      }
-
       ++m_spiBufferIndex;
 
-      if (m_spiBufferIndex >= m_frameSize) {
-        validateAndDispatchFrame(); 
+      // 2. END-OF-FRAME BOUNDARY RECOVERY AND STAGING
+      if (m_spiBufferIndex >= m_packetSize) {
+        validateAndDispatchFrame(); // Dispatches payload and increments total frames
+
+        // Snapshot shadow buffer to active transmission memory safely between packets
+        memcpy((void*)m_spiOutputBuffer, (const void*)m_nextTxFrame, m_packetSize);
+
+        // Reset all processing metrics for the upcoming frame
         m_spiBufferIndex = 0;
-        m_frameSynced = false; 
+        m_packetSynced = false;
+        rawClockCount = 0; // Hard reset our independent transmit tracker
+
+        // Hard-reset the TX FIFO queue to wipe out any leftover underflow data
+        LPSPI4_CR |= LPSPI_CR_RTF; 
+        asm volatile ("dsb");
+
+        // Pre-load the first 4 bytes of the newly staged frame (Indices 0, 1, 2, 3)
+        // so 'AA 55 00 00' sits ready on the pins for the next transaction window
+        for (uint8_t i = 0; i < 4 && i < m_packetSize; ++i) {
+          LPSPI4_TDR = m_spiOutputBuffer[i];
+        }
+        asm volatile ("dsb");
       }
     }
   }
 
-  // 3. ERROR LOG MAINTENANCE
+  // 3. ERROR AND STICKY REGISTER MAINTENANCE
   if (LPSPI4_SR & LPSPI_SR_TEF) {
     LPSPI4_SR = LPSPI_SR_TEF; // Clear transmit error flag
     ++m_txErrorCount;
   }
-
-  m_uncheckedInterruptDebugData = true;
-  
   if (LPSPI4_SR & LPSPI_SR_WCF) {
     LPSPI4_SR = LPSPI_SR_WCF;
   }
+  if (LPSPI4_SR & LPSPI_SR_FCF) {
+    LPSPI4_SR = LPSPI_SR_FCF;
+    ++m_fcfsReceived;
+  }
+  m_uncheckedInterruptDebugData = true;
 }
 
 void SPIConnection::printTCRRegisterDetail() const {
