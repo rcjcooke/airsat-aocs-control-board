@@ -149,9 +149,9 @@ void loop() {
                   reactionWheelFaultToString(wheelController.status().rwFault).c_str());
 
     if (SPI_DEBUG) {
-      obcConnection.spiConnection().printSRRegisterDetail();
-      obcConnection.spiConnection().printFSRRegisterDetail();
-      obcConnection.spiConnection().printRSRRegisterDetail();
+      // obcConnection.spiConnection().printSRRegisterDetail();
+      // obcConnection.spiConnection().printFSRRegisterDetail();
+      // obcConnection.spiConnection().printRSRRegisterDetail();
       SPIConnection::State spiState = obcConnection.spiConnection().state();
       Serial.printf("[main] [SPI] [DEBUG] SPI State: %s\r\n", 
                     (spiState == SPIConnection::State::Idle) ? "Idle" : 
@@ -159,20 +159,22 @@ void loop() {
                     (spiState == SPIConnection::State::Transceiving) ? "Transceiving" : "Unknown");
 
       SPIConnection::Stats spiStats = obcConnection.spiConnection().statsSnapshot();
-      Serial.printf("[main] [SPI] [DEBUG] Interrupt Calls: %u | Last Byte RX: %u | Total Bytes RX: %u | Total Frames RX: %u | Bytes Lost Syncing: %u | Bytes RX in Last Interrupt: %u | FCFS Received: %u | TX Errors: %u\r\n",
-                    spiStats.interruptCalls,
+      Serial.printf("[main] [SPI] [DEBUG] Byte RX ISR Calls: %u | Last Byte RX: %u | Total Bytes RX: %u | Bytes RX in Last Interrupt: %u | FCFS Received: %u | TX Errors: %u\r\n",
+                    spiStats.byteRxISRCalls,
                     spiStats.lastByteReceived,
                     spiStats.totalBytesReceived,
-                    spiStats.totalFramesReceived,
-                    spiStats.bytesLostSyncing,
                     spiStats.bytesReceivedInLastInterrupt,
                     spiStats.fcfsReceived,
                     spiStats.txErrorCount);
 
+      Serial.printf("[main] [SPI] [DEBUG] Total Packets RX: %u | Total checksum failures: %u\r\n",
+                    spiStats.totalPacketsReceived,
+                    spiStats.checksumFailureCount);
+
       uint8_t rxPayloadSnapshot[sizeof(CommandPayload)] = {0};
       obcConnection.copyLastRxPayload(rxPayloadSnapshot, sizeof(rxPayloadSnapshot));
       uint8_t txFrameSnapshot[26] = {0}; 
-      obcConnection.spiConnection().copyLastTxFrame(txFrameSnapshot, sizeof(txFrameSnapshot));
+      obcConnection.spiConnection().copyOutgoingTxFrame(txFrameSnapshot, sizeof(txFrameSnapshot));
 
       Serial.printf("[main] [SPI] [DEBUG] Last RX payload (%u bytes): ", static_cast<unsigned>(sizeof(rxPayloadSnapshot)));
       for (size_t i = 0; i < sizeof(rxPayloadSnapshot); ++i) {
