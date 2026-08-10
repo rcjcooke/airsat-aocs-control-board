@@ -15,9 +15,15 @@
 #define SLAVE_PINS_ADDR volatile uint32_t *spiAddr = &(*(volatile uint32_t*)(0x401F84EC + (_portnum * 0x10)))
 
 void lpspi4_slave_isr() {
+  // Defensive guard: avoid null dereference during startup/teardown races.
+  if (_LPSPI4 == nullptr) {
+    // Clear sticky flags and leave quickly.
+    LPSPI4_SR = 0x3F00;
+    asm volatile ("dsb");
+    return;
+  }
   _LPSPI4->SLAVE_ISR();
 }
-
 
 SPISlave_T4_FUNC SPISlave_T4_OPT::SPISlave_T4() {
   if ( port == &SPI ) {
@@ -31,26 +37,27 @@ SPISlave_T4_FUNC SPISlave_T4_OPT::SPISlave_T4() {
     _VectorsRam[16 + nvic_irq] = lpspi4_slave_isr;
 
     // Set up pins and muxes
-    IOMUXC_LPSPI4_PCS0_SELECT_INPUT = 0x0; /* PCS0_SELECT_INPUT */
-    IOMUXC_LPSPI4_SDI_SELECT_INPUT = 0x0; /* SDI_SELECT_INPUT */
-    IOMUXC_LPSPI4_SDO_SELECT_INPUT = 0x0; /* SDO_SELECT_INPUT */
-    IOMUXC_LPSPI4_SCK_SELECT_INPUT = 0x0; /* SCK_SELECT_INPUT */
-    IOMUXC_SW_MUX_CTL_PAD_GPIO_B0_00 = 0x3; /* LPSPI4 PCS0 (CS) - Chip Select driven from Master */
-    IOMUXC_SW_MUX_CTL_PAD_GPIO_B0_01 = 0x3; /* LPSPI4 SDI (MISO) - MOSI from Master */
-    IOMUXC_SW_MUX_CTL_PAD_GPIO_B0_02 = 0x3; /* LPSPI4 SDO (MOSI) - MISO to Master */
-    IOMUXC_SW_MUX_CTL_PAD_GPIO_B0_03 = 0x3; /* LPSPI4 SCK (CLK) - Clock driven from Master */
+    IOMUXC_LPSPI4_PCS0_SELECT_INPUT = 0x0; /* Select Pin 10 for CS */
+    IOMUXC_LPSPI4_SCK_SELECT_INPUT  = 0x0; /* Select Pin 13 for CLK */
+    IOMUXC_LPSPI4_SDI_SELECT_INPUT  = 0x0; /* Maps internal Data Input (SDI) back to Pin 11/12 hardware block */
+    IOMUXC_LPSPI4_SDO_SELECT_INPUT  = 0x0; /* Maps internal Data Output (SDO) back to Pin 11/12 hardware block */
 
-    // Pin 10 (CS): 22k Internal Pull-Up, Hysteresis Enabled (0x0001B0B0)
-    IOMUXC_SW_PAD_CTL_PAD_GPIO_B0_00 = 0x0001B0B0;
-    // Pin 12 (SDI / MISO: MOSI from Master):100k Internal Pull-Down, Hysteresis Enabled
-    // This fixes the listening pin's noise floor!
-    IOMUXC_SW_PAD_CTL_PAD_GPIO_B0_01 = 0x000130B0;
-    // Pin 11 (SDI/ MOSI: MISO to Master): No Pulls, Max Drive Strength, Fast Slew Rate
-    // This ensures sharp response edges back to the Raspberry Pi.
-    IOMUXC_SW_PAD_CTL_PAD_GPIO_B0_02 = 0x000010B0;
-    // Pin 13 (CLK / SCK): 100k Internal Pull-Down, Hysteresis Enabled (0x000130B0)
-    // Critical: Prevents CAN-FD switching noise from being interpreted as extra clock pulses.
-    IOMUXC_SW_PAD_CTL_PAD_GPIO_B0_03 = 0x000130B0;
+    IOMUXC_SW_MUX_CTL_PAD_GPIO_B0_00 = 0x3; /* Pin 10 - PCS0 (CS) */
+    IOMUXC_SW_MUX_CTL_PAD_GPIO_B0_01 = 0x3; /* Pin 12 - SDI  (Data Input) */
+    IOMUXC_SW_MUX_CTL_PAD_GPIO_B0_02 = 0x3; /* Pin 11 - SDO  (Data Output) */
+    IOMUXC_SW_MUX_CTL_PAD_GPIO_B0_03 = 0x3; /* Pin 13 - SCK  (Clock) */
+
+    // Revert Electrical pad settings to match their true direction:
+    // IOMUXC_SW_PAD_CTL_PAD_GPIO_B0_00 = 0x0001B0B0; // Pin 10 CS Pull-up
+    // IOMUXC_SW_PAD_CTL_PAD_GPIO_B0_03 = 0x000130B0; // Pin 13 CLK Pull-down
+    
+    // // Pin 12 is the REAL hardware input (SDI): Needs Pull-down and Hysteresis
+    // IOMUXC_SW_PAD_CTL_PAD_GPIO_B0_01 = 0x000130B0; 
+
+    // // Pin 11 is the REAL hardware output (SDO): Needs high drive strength, no pulls
+    // IOMUXC_SW_PAD_CTL_PAD_GPIO_B0_02 = 0x000010B0; 
+
+
 
   } 
 }
@@ -105,6 +112,12 @@ SPISlave_T4_FUNC bool SPISlave_T4_OPT::isDataAvailable(u_int32_t status) {
   return (status & LPSPI_SR_RDF);
 }
 
+SPISlave_T4_FUNC void SPISlave_T4_OPT::resetTxFIFO() {
+  SLAVE_PORT_ADDR;
+  SLAVE_CR |= LPSPI_CR_RTF; 
+  asm volatile ("dsb");
+}
+
 SPISlave_T4_FUNC bool SPISlave_T4_OPT::active() {
   SLAVE_PORT_ADDR;
   return ( !(SLAVE_SR & (1UL << 9)) ) ? 1 : 0;
@@ -139,8 +152,10 @@ SPISlave_T4_FUNC void SPISlave_T4_OPT::SLAVE_ISR() {
 
   // SLAVE_PORT_ADDR;
 
-  if ( _spihandler ) {
-    _spihandler();
+  // Copy callback pointer first so ISR does not race a mid-flight reassignment.
+  _SPI_ptr handler = _spihandler;
+  if (handler) {
+    handler();
     // SLAVE_SR = 0x3F00;
     asm volatile ("dsb");
     return;
@@ -165,12 +180,12 @@ SPISlave_T4_FUNC void SPISlave_T4_OPT::SLAVE_ISR() {
 
 SPISlave_T4_FUNC void SPISlave_T4_OPT::setIERTriggerMode(bool anyData, bool frameComplete) {
   SLAVE_PORT_ADDR;
-  _ierTriggerMode = anyData ? LPSPI_IER_RDIE : 0;
+  _ierTriggerMode = anyData ? LPSPI_IER_RDIE : 0; // | LPSPI_IER_TDIE
   _ierTriggerMode |= frameComplete ? LPSPI_IER_FCIE : 0;
   SLAVE_IER = _ierTriggerMode;
 }
 
-SPISlave_T4_FUNC void SPISlave_T4_OPT::begin() {
+SPISlave_T4_FUNC void SPISlave_T4_OPT::begin(uint32_t initialByte) {
   // Set up Transmit Command Register (TCR) _before_ enabling LPSPI in Slave mode
 
   SLAVE_PORT_ADDR;
@@ -180,12 +195,16 @@ SPISlave_T4_FUNC void SPISlave_T4_OPT::begin() {
   // BUG FIX: SLAVE_IER was incorrectly set to trigger on TDIE only
   SLAVE_IER = _ierTriggerMode; /* RX Interrupt */
   SLAVE_CFGR0 = 0;
-  SLAVE_CFGR1 = 0;
+  SLAVE_CFGR1 = 0; // Bit 0 = 0 is what sets this up as a Slave device
   SLAVE_CR |= LPSPI_CR_MEN | LPSPI_CR_DBGEN; /* Enable Module, Debug Mode */
   SLAVE_SR = 0x3F00; /* Clear status register */
   // Note: This will zero off all TCR bits except the frame size - which is ok but does mask some other configuration options
   SLAVE_TCR_REFRESH;
-  SLAVE_TDR = 0x0; /* dummy data, must populate initial TX slot */
+  SLAVE_TDR = initialByte;
   NVIC_ENABLE_IRQ(nvic_irq);
   NVIC_SET_PRIORITY(nvic_irq, 144);
+}
+
+SPISlave_T4_FUNC void SPISlave_T4_OPT::begin() {
+  begin(0x0);
 }

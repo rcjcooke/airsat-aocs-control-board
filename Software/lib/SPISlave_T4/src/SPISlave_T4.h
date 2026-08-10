@@ -21,7 +21,7 @@ extern SPIClass SPI;
 
 class SPISlave_T4_Base {
   public:
-    virtual void SLAVE_ISR();
+    virtual void SLAVE_ISR() = 0;
 };
 
 //static SPISlave_T4_Base* _LPSPI1 = nullptr;
@@ -34,6 +34,7 @@ SPISlave_T4_CLASS class SPISlave_T4 : public SPISlave_T4_Base {
     SPISlave_T4();
     // Set the interrupt enable register (IER) trigger mode for the SPI slave
     void setIERTriggerMode(bool anyData, bool frameComplete);
+    void begin(uint32_t initialByte);
     void begin();
     uint32_t transmitErrors();
     void onReceive(_SPI_ptr handler) { _spihandler = handler; }
@@ -44,6 +45,7 @@ SPISlave_T4_CLASS class SPISlave_T4 : public SPISlave_T4_Base {
     // Is there a byte waiting to be read from the receive FIFO? If status is supplied, then extracts the information from the supplied status
     bool isDataAvailable();
     bool isDataAvailable(u_int32_t status);
+    void resetTxFIFO();
 
     // bool isTransmitError();
     void sniffer(bool enable = 1);
