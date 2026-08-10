@@ -26,7 +26,7 @@ struct AOCSControllerTelemetry {
   float thrusters2ThrustN = 0.0f;
   float thrusters3ThrustN = 0.0f;
   float thrusters4ThrustN = 0.0f;
-  float thrustersPropellantRemainingM3 = 0.0f;
+  float thrustersPropellantRemainingKg = 0.0f;
 
 };
 

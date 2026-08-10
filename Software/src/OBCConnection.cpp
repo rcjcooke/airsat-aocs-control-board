@@ -48,7 +48,7 @@ void OBCConnection::updateTelemetry(const AOCSControllerTelemetry& telemetry) {
   // Create a new telemetry payload based on the provided AOCSControllerTelemetry data
   TelemetryPayload obcTelemetry;
   obcTelemetry.momentum = telemetry.wheelStoredAngularMomentumKGM2S;
-  obcTelemetry.propellant = static_cast<uint16_t>(telemetry.thrustersPropellantRemainingM3 * 1000.0f); // Convert to milliliters
+  obcTelemetry.propellant = static_cast<uint16_t>(telemetry.thrustersPropellantRemainingKg);
   obcTelemetry.error_count = rxErrorCount();
 
   // Switch it over

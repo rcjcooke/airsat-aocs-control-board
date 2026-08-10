@@ -28,7 +28,9 @@ SPIConnection::SPIConnection(bool debugEnabled, uint8_t payloadSize)
       m_state(State::Idle),
       m_spiInputBuffer{0},
       m_spiOutputBuffer{0},
+      m_completedFrameBuffer{0},
       m_spiBufferIndex(0),
+      m_completedFrameReady(false),
       m_packetSynced(false),
       m_lastRxPayload{0},
       m_nextTxFrame{0},
@@ -42,7 +44,9 @@ SPIConnection::SPIConnection(bool debugEnabled, uint8_t payloadSize)
       m_bytesReceivedInLastInterrupt(0),
       m_uncheckedInterruptDebugData(false),
       m_fcfsReceived(0),
+      m_refsReceived(0),
       m_txErrorCount(0),
+      m_completedFrameDropCount(0),
       m_payloadReadyHandler(nullptr) {
   buildTxFrameFromPayload(nullptr, 0);
 }
@@ -52,14 +56,18 @@ void SPIConnection::begin() {
 
   m_state = State::Idle;
   m_spiBufferIndex = 0;
+  m_completedFrameReady = false;
   m_packetSynced = false;
   m_uncheckedInterruptDebugData = false;
   m_isActive = false;
 
   memcpy((void*)m_spiOutputBuffer, (const void*)m_nextTxFrame, m_packetSize);
-
+  
   g_spi.setIERTriggerMode(true, false);
-  g_spi.begin();
+  g_spi.begin(m_spiOutputBuffer[0]); // Start with the first output byte in the FIFO
+  // Use the watermark to reduce interrupt calls
+  LPSPI4_FCR = LPSPI_FCR_RXWATER(kRxInterruptWatermark) | LPSPI_FCR_TXWATER(0);
+  asm volatile ("dsb");
   g_spi.onReceive(handleMessageISR);
 
   if (m_debugEnabled) {
@@ -71,6 +79,23 @@ void SPIConnection::activate() {
   m_isActive = true;
   if (m_debugEnabled) {
     Serial.println("[SPI] [DEBUG] Message processing activated");
+  }
+}
+
+void SPIConnection::service() {
+  uint8_t localFrame[kMaxFrameSize] = {0};
+  bool hasCompletedFrame = false;
+
+  noInterrupts();
+  if (m_completedFrameReady) {
+    memcpy(localFrame, (const void*)m_completedFrameBuffer, m_packetSize);
+    m_completedFrameReady = false;
+    hasCompletedFrame = true;
+  }
+  interrupts();
+
+  if (hasCompletedFrame) {
+    validateAndDispatchFrame(localFrame);
   }
 }
 
@@ -146,8 +171,10 @@ SPIConnection::Stats SPIConnection::statsSnapshot() const {
       m_bytesLostSyncing,
       m_bytesReceivedInLastInterrupt,
       m_fcfsReceived,
+      m_refsReceived,
       m_txErrorCount,
-      m_checksumFailureCount};
+      m_checksumFailureCount,
+      m_completedFrameDropCount};
   interrupts();
   return snapshot;
 }
@@ -185,27 +212,34 @@ void SPIConnection::buildTxFrameFromPayload(const uint8_t* payload, size_t paylo
   m_nextTxFrame[m_packetSize - 1] = static_cast<uint8_t>((checksum >> 8) & 0xFF);
 }
 
-void SPIConnection::validateAndDispatchFrame() {
+void SPIConnection::validateAndDispatchFrame(const uint8_t* frameData) {
+  if (frameData == nullptr) {
+    return;
+  }
+
   const uint16_t calculatedChecksum =
-      calculateFletcher16(m_spiInputBuffer, m_packetSize - kChecksumSize);
+      calculateFletcher16(frameData, m_packetSize - kChecksumSize);
   const uint16_t receivedChecksum =
-      static_cast<uint16_t>(m_spiInputBuffer[m_packetSize - 2]) |
-      (static_cast<uint16_t>(m_spiInputBuffer[m_packetSize - 1]) << 8);
+      static_cast<uint16_t>(frameData[m_packetSize - 2]) |
+      (static_cast<uint16_t>(frameData[m_packetSize - 1]) << 8);
 
   if (calculatedChecksum != receivedChecksum) {
     ++m_checksumFailureCount;
     return;
   }
 
-  memcpy((void*)m_lastRxPayload, (const void*)&m_spiInputBuffer[kSyncSize], m_payloadSize);
+  noInterrupts();
+  memcpy((void*)m_lastRxPayload, (const void*)&frameData[kSyncSize], m_payloadSize);
+  PayloadReadyHandler handlerCopy = (PayloadReadyHandler)m_payloadReadyHandler;
+  const bool isActive = m_isActive;
+  interrupts();
 
-  if (m_isActive) {
-    // SAFE COPY TO PREVENT NULLPTR FAULTS:
-    PayloadReadyHandler handlerCopy = (PayloadReadyHandler) m_payloadReadyHandler;
-    if (handlerCopy != nullptr) {
-      handlerCopy((const uint8_t*)m_lastRxPayload, m_payloadSize);
-      ++m_totalPacketsReceived;
-    }
+  if (isActive && handlerCopy != nullptr) {
+    handlerCopy((const uint8_t*)m_lastRxPayload, m_payloadSize);
+
+    noInterrupts();
+    ++m_totalPacketsReceived;
+    interrupts();
   }
 }
 
@@ -221,14 +255,19 @@ void SPIConnection::handleMessage() {
     m_bytesReceivedInLastInterrupt = 0;
   }
 
-  // Independent counter to track exactly how many bytes have been clocked
-  // in by the Pi during THIS specific frame transaction window.
-  static uint8_t rawClockCount = 0;
+  // Defensive sanity: if configuration is ever corrupted, fail safe and avoid OOB.
+  if (m_packetSize == 0 || m_packetSize > kMaxFrameSize) {
+    m_packetSynced = false;
+    m_spiBufferIndex = 0;
+    m_state = State::Idle;
+    return;
+  }
 
-  // 1. INTEGRATED RX/TX LOOP (RDIE triggered)
-  while (g_spi.isDataAvailable()) {
+  // 1. INTEGRATED RX DATA HANDLING PATH (RDIE)
+  while (LPSPI4_SR & LPSPI_SR_RDF) {
     uint32_t rawRegValue = g_spi.popr();
     const uint8_t rxData = static_cast<uint8_t>(rawRegValue & 0xFF); 
+    // Serial.printf("[SPI] [DEBUG] RX Byte: 0x%08X\r\n", rawRegValue);
 
     m_lastByteReceived = rxData;
     ++m_totalBytesReceived;
@@ -236,22 +275,15 @@ void SPIConnection::handleMessage() {
       ++m_bytesReceivedInLastInterrupt;
     }
 
-    // THE ABSOLUTE TRANSMIT PIPELINE FEED:
-    // Because we popped an inbound byte, exactly one TX slot has opened.
-    // We base our look-ahead strictly on rawClockCount + 4. This guarantees
-    // the output stream follows a perfect 4, 5, 6, 7... sequence and is 100%
-    // immune to any variable hunting shifts or index resets inside the state machine.
-    uint8_t nextTxIndex = rawClockCount + 4;
-    if (nextTxIndex < m_packetSize) {
-      LPSPI4_TDR = m_spiOutputBuffer[nextTxIndex];
-    } else {
-      LPSPI4_TDR = 0x00; // Terminal padding fallback
-    }
-    
-    // Step our independent transmission counter forward for this byte pulse
-    ++rawClockCount;
+    // Hard bounds check to prevent any possibility of out-of-range buffer writes.
+    if (m_spiBufferIndex >= kMaxFrameSize || m_spiBufferIndex >= m_packetSize) {
+      ++m_syncDropCount;
+      m_packetSynced = false;
+      m_spiBufferIndex = 0;
+      continue;
+    }    
 
-    // --- RECEIVE STATE MACHINE (Restored & Safe) ---
+    // --- RECEIVE STATE MACHINE ---
     if (!m_packetSynced) {
       m_state = State::Syncing;
       
@@ -266,53 +298,77 @@ void SPIConnection::handleMessage() {
         if (rxData == kSyncByte1) {
           m_spiInputBuffer[1] = rxData;
           m_spiBufferIndex = 2;
-          m_packetSynced = true; // Lock into active payload collection
+          m_packetSynced = true; // Clean frame lock achieved!
         } else {
-          ++m_syncDropCount;
-          ++m_bytesLostSyncing;
-          
           if (rxData == kSyncByte0) {
             m_spiInputBuffer[0] = rxData;
             m_spiBufferIndex = 1;
           } else {
+            ++m_bytesLostSyncing;
             m_spiBufferIndex = 0;
           }
         }
       }
     } else {
       m_state = State::Transceiving;
+
+      // Guard again immediately before indexed store.
+      if (m_spiBufferIndex >= kMaxFrameSize || m_spiBufferIndex >= m_packetSize) {
+        ++m_syncDropCount;
+        m_packetSynced = false;
+        m_spiBufferIndex = 0;
+        continue;
+      }
       m_spiInputBuffer[m_spiBufferIndex] = rxData;
-      ++m_spiBufferIndex;
 
-      // 2. END-OF-FRAME BOUNDARY RECOVERY AND STAGING
-      if (m_spiBufferIndex >= m_packetSize) {
-        validateAndDispatchFrame(); // Dispatches payload and increments total frames
-
-        // Snapshot shadow buffer to active transmission memory safely between packets
-        memcpy((void*)m_spiOutputBuffer, (const void*)m_nextTxFrame, m_packetSize);
-
-        // Reset all processing metrics for the upcoming frame
+      if ((m_spiBufferIndex == 0 && rxData != kSyncByte0) || (m_spiBufferIndex == 1 && rxData != kSyncByte1)) {
+        ++m_syncDropCount;
         m_spiBufferIndex = 0;
         m_packetSynced = false;
-        rawClockCount = 0; // Hard reset our independent transmit tracker
 
-        // Hard-reset the TX FIFO queue to wipe out any leftover underflow data
-        LPSPI4_CR |= LPSPI_CR_RTF; 
+        LPSPI4_CR |= LPSPI_CR_RTF;
         asm volatile ("dsb");
+        // g_spi.pushr(m_spiOutputBuffer[0]);
+      } else {
+        ++m_spiBufferIndex;
 
-        // Pre-load the first 4 bytes of the newly staged frame (Indices 0, 1, 2, 3)
-        // so 'AA 55 00 00' sits ready on the pins for the next transaction window
-        for (uint8_t i = 0; i < 4 && i < m_packetSize; ++i) {
-          LPSPI4_TDR = m_spiOutputBuffer[i];
+        if (m_spiBufferIndex >= m_packetSize) {
+          if (m_completedFrameReady) {
+            ++m_completedFrameDropCount;
+          }
+          memcpy((void*)m_completedFrameBuffer, (const void*)m_spiInputBuffer, m_packetSize);
+          m_completedFrameReady = true;
+
+          memcpy((void*)m_spiOutputBuffer, (const void*)m_nextTxFrame, m_packetSize);
+          
+          m_spiBufferIndex = 0;
+          m_packetSynced = false;
+
+          LPSPI4_CR |= LPSPI_CR_RTF;
+          asm volatile ("dsb");
+          // g_spi.pushr(m_spiOutputBuffer[0]);
         }
-        asm volatile ("dsb");
       }
     }
   }
 
+  // 2. DETACHED TRANSMIT PIPELINE SERVICE (Services both mid-loop and trailing TDIE exits)
+  // By tracking progress via txProgressIndex++, we guarantee that regardless of how 
+  // many times this block triggers asynchronously, it will NEVER push a duplicate byte.
+  // if (LPSPI4_SR & LPSPI_SR_TDF) {
+  //   if (txProgressIndex < m_packetSize) {
+  //     g_spi.pushr(m_spiOutputBuffer[txProgressIndex]);
+  //     ++txProgressIndex; // Step our output progress tracking array index forward explicitly
+  //   } else {
+  //     // If the packet has finished streaming but the Pi is still idling, 
+  //     // park a safe 0xAA sync byte at the top of the queue ready for the next frame hunt.
+  //     g_spi.pushr(m_spiOutputBuffer[0]); 
+  //   }
+  // }
+
   // 3. ERROR AND STICKY REGISTER MAINTENANCE
   if (LPSPI4_SR & LPSPI_SR_TEF) {
-    LPSPI4_SR = LPSPI_SR_TEF; // Clear transmit error flag
+    LPSPI4_SR = LPSPI_SR_TEF; 
     ++m_txErrorCount;
   }
   if (LPSPI4_SR & LPSPI_SR_WCF) {
@@ -321,6 +377,10 @@ void SPIConnection::handleMessage() {
   if (LPSPI4_SR & LPSPI_SR_FCF) {
     LPSPI4_SR = LPSPI_SR_FCF;
     ++m_fcfsReceived;
+  }
+  if (LPSPI4_SR & LPSPI_SR_REF) {
+    LPSPI4_SR = LPSPI_SR_REF;
+    ++m_refsReceived;
   }
   m_uncheckedInterruptDebugData = true;
 }

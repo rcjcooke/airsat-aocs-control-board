@@ -12,6 +12,7 @@ class SPIConnection {
   static constexpr uint8_t kFrameOverhead = kSyncSize + kChecksumSize;
   static constexpr uint8_t kDefaultPayloadSize = 22;
   static constexpr uint8_t kMaxPayloadSize = 60;
+  static constexpr uint8_t kRxInterruptWatermark = 7; // RDF when RX FIFO has >= 8 bytes
   static constexpr uint8_t kMaxFrameSize = kMaxPayloadSize + kFrameOverhead;
 
   using PayloadReadyHandler = void (*)(const uint8_t* payload, uint8_t payloadSize);
@@ -31,14 +32,17 @@ class SPIConnection {
     uint32_t bytesLostSyncing;
     uint32_t bytesReceivedInLastInterrupt;
     uint32_t fcfsReceived;
+    uint32_t refsReceived;
     uint32_t txErrorCount;
     uint32_t checksumFailureCount;
+    uint32_t completedFrameDropCount;
   };
 
   explicit SPIConnection(bool debugEnabled, uint8_t payloadSize = kDefaultPayloadSize);
 
   void begin();
   void activate();
+  void service();
   void setPayloadReadyHandler(PayloadReadyHandler handler);
   void setNextTxPayload(const uint8_t* payload, size_t payloadSize);
   void copyLastRxPayload(uint8_t* destination, size_t maxBytes) const;
@@ -72,7 +76,7 @@ class SPIConnection {
   static void handleMessageISR();
   void handleMessage();
   void buildTxFrameFromPayload(const uint8_t* payload, size_t payloadSize);
-  void validateAndDispatchFrame();
+  void validateAndDispatchFrame(const uint8_t* frameData);
 
   volatile bool m_isActive = false;
 
@@ -83,7 +87,9 @@ class SPIConnection {
 
   uint8_t m_spiInputBuffer[kMaxFrameSize];
   uint8_t m_spiOutputBuffer[kMaxFrameSize];
+  volatile uint8_t m_completedFrameBuffer[kMaxFrameSize];
   uint8_t m_spiBufferIndex;
+  volatile bool m_completedFrameReady;
 
   bool m_packetSynced;
   volatile uint8_t m_lastRxPayload[kMaxPayloadSize];
@@ -101,7 +107,9 @@ class SPIConnection {
   volatile uint32_t m_bytesReceivedInLastInterrupt;
   volatile bool m_uncheckedInterruptDebugData;
   volatile uint32_t m_fcfsReceived;
+  volatile uint32_t m_refsReceived;
   volatile uint32_t m_txErrorCount;
+  volatile uint32_t m_completedFrameDropCount;
 
   volatile PayloadReadyHandler m_payloadReadyHandler;
 

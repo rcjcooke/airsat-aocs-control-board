@@ -68,11 +68,7 @@ void setup() {
 
   // Set up initial parameters
   currentTelemetry.wheelStoredAngularMomentumKGM2S = 0.0f;
-  currentTelemetry.thrustersPropellantRemainingM3 = 1000.0f;
-
-  // Spin up the OBC Link (SPI)
-  Serial.println("[main] Initialising OBC SPI Link...");
-  obcConnection.begin();
+  currentTelemetry.thrustersPropellantRemainingKg = 1.0f;
 
   // Spin up CAN interface
   const uint32_t errorCode = ACAN_T4::can3.beginFD(canSettings);
@@ -86,8 +82,18 @@ void setup() {
   Serial.println("[main] Initialising Reaction Wheel Controller...");
   wheelController.begin();
 
+  // Spin up the OBC Link (SPI)
+  Serial.println("[main] Initialising OBC SPI Link...");
+  obcConnection.updateTelemetry(currentTelemetry); // Must set telemetry before calling begin() so that the first frame is valid
+  obcConnection.begin();
+
   // Finally - start processing OBC messages once we know everything is up and running
   obcConnection.activateSPI();
+
+  // Print out some debug if needed
+  if (SPI_DEBUG) {
+    obcConnection.spiConnection().spiRegisterAudit();
+  }
   
   if (wheelController.status().rwMode != ReactionWheel::RWMode::kRunning) {
     Serial.println("[main] [WARN] Reaction Wheel offline at startup validation check.");
@@ -97,6 +103,9 @@ void setup() {
 }
 
 void loop() {
+  // Keep SPI ISR lean: process completed frames in thread context.
+  obcConnection.spiConnection().service();
+
   // Run sub-system loops
   wheelController.update();
   
@@ -149,9 +158,9 @@ void loop() {
                   reactionWheelFaultToString(wheelController.status().rwFault).c_str());
 
     if (SPI_DEBUG) {
-      // obcConnection.spiConnection().printSRRegisterDetail();
-      // obcConnection.spiConnection().printFSRRegisterDetail();
-      // obcConnection.spiConnection().printRSRRegisterDetail();
+      obcConnection.spiConnection().printSRRegisterDetail();
+      obcConnection.spiConnection().printFSRRegisterDetail();
+      obcConnection.spiConnection().printRSRRegisterDetail();
       SPIConnection::State spiState = obcConnection.spiConnection().state();
       Serial.printf("[main] [SPI] [DEBUG] SPI State: %s\r\n", 
                     (spiState == SPIConnection::State::Idle) ? "Idle" : 
@@ -159,17 +168,20 @@ void loop() {
                     (spiState == SPIConnection::State::Transceiving) ? "Transceiving" : "Unknown");
 
       SPIConnection::Stats spiStats = obcConnection.spiConnection().statsSnapshot();
-      Serial.printf("[main] [SPI] [DEBUG] Byte RX ISR Calls: %u | Last Byte RX: %u | Total Bytes RX: %u | Bytes RX in Last Interrupt: %u | FCFS Received: %u | TX Errors: %u\r\n",
+      Serial.printf("[main] [SPI] [DEBUG] Byte RX ISR Calls: %u | Last Byte RX: %02X | Total Bytes RX: %u | Bytes RX in Last Interrupt: %u | FCFs Received: %u | REFs Received: %u | TX Errors: %u\r\n",
                     spiStats.byteRxISRCalls,
                     spiStats.lastByteReceived,
                     spiStats.totalBytesReceived,
                     spiStats.bytesReceivedInLastInterrupt,
                     spiStats.fcfsReceived,
+                    spiStats.refsReceived,
                     spiStats.txErrorCount);
 
-      Serial.printf("[main] [SPI] [DEBUG] Total Packets RX: %u | Total checksum failures: %u\r\n",
+      Serial.printf("[main] [SPI] [DEBUG] Total Packets RX: %u | Bytes lost syncing: %u | Total checksum failures: %u | Completed frame drops: %u\r\n",
                     spiStats.totalPacketsReceived,
-                    spiStats.checksumFailureCount);
+                    spiStats.bytesLostSyncing,
+                    spiStats.checksumFailureCount,
+                    spiStats.completedFrameDropCount);
 
       uint8_t rxPayloadSnapshot[sizeof(CommandPayload)] = {0};
       obcConnection.copyLastRxPayload(rxPayloadSnapshot, sizeof(rxPayloadSnapshot));
