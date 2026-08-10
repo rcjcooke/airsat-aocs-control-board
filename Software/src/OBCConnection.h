@@ -36,7 +36,7 @@ class OBCConnection {
   void updateTelemetry(const AOCSControllerTelemetry& telemetry);
 
   bool isConnected() const;
-  uint8_t rxErrorCount() const;
+  uint32_t rxErrorCount() const;
   uint32_t totalBytesReceived() const;
   uint8_t syncDropCount() const;
   uint8_t commandCount() const;

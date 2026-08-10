@@ -63,8 +63,12 @@ bool OBCConnection::isConnected() const {
   return m_spiConnection.state() == SPIConnection::State::Transceiving;
 }
 
-uint8_t OBCConnection::rxErrorCount() const {
-  return m_malformedFrame + m_spiConnection.checksumFailureCount();
+uint32_t OBCConnection::rxErrorCount() const {
+  uint32_t chkSumErrors = m_spiConnection.checksumFailureCount();
+  noInterrupts();
+  uint32_t count = m_malformedFrame + chkSumErrors;
+  interrupts();
+  return count;
 }
 
 uint32_t OBCConnection::totalBytesReceived() const {
