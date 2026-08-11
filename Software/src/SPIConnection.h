@@ -14,6 +14,7 @@ class SPIConnection {
   static constexpr uint8_t kMaxPayloadSize = 60;
   static constexpr uint8_t kRxInterruptWatermark = 7; // RDF when RX FIFO has >= 8 bytes
   static constexpr uint8_t kMaxFrameSize = kMaxPayloadSize + kFrameOverhead;
+  static constexpr uint8_t kTxFifoHeadroom = 1;
 
   using PayloadReadyHandler = void (*)(const uint8_t* payload, uint8_t payloadSize);
 
@@ -77,7 +78,6 @@ class SPIConnection {
   void handleMessage();
   void processReceivedByte(uint8_t rxData);
   void primeTxFIFO();
-  void resetAndPrimeTxFIFO();
   void buildTxFrameFromPayload(const uint8_t* payload, size_t payloadSize);
   void validateAndDispatchFrame(const uint8_t* frameData);
 

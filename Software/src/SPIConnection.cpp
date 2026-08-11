@@ -111,6 +111,7 @@ void SPIConnection::setPayloadReadyHandler(PayloadReadyHandler handler) {
 void SPIConnection::setNextTxPayload(const uint8_t* payload, size_t payloadSize) {
   noInterrupts();
   buildTxFrameFromPayload(payload, payloadSize);
+  memcpy((void*)m_spiOutputBuffer, (const void*)m_nextTxFrame, m_packetSize);
   interrupts();
 }
 
@@ -357,7 +358,6 @@ void SPIConnection::processReceivedByte(uint8_t rxData) {
     ++m_syncDropCount;
     m_spiBufferIndex = 0;
     m_packetSynced = false;
-    resetAndPrimeTxFIFO();
     return;
   }
 
@@ -369,11 +369,8 @@ void SPIConnection::processReceivedByte(uint8_t rxData) {
     }
     memcpy((void*)m_completedFrameBuffer, (const void*)m_spiInputBuffer, m_packetSize);
     m_completedFrameReady = true;
-
-    memcpy((void*)m_spiOutputBuffer, (const void*)m_nextTxFrame, m_packetSize);
     m_spiBufferIndex = 0;
     m_packetSynced = false;
-    resetAndPrimeTxFIFO();
   }
 }
 
@@ -381,21 +378,13 @@ void SPIConnection::primeTxFIFO() {
   const uint32_t txFifoDepthEncoded = LPSPI4_PARAM & 0xFF;
   const uint32_t txFifoCapacity = 1UL << txFifoDepthEncoded;
   const uint32_t txPrefillTarget =
-      (static_cast<uint32_t>(kRxInterruptWatermark) + 5U < txFifoCapacity)
-          ? static_cast<uint32_t>(kRxInterruptWatermark) + 5U
-          : txFifoCapacity;
+      (txFifoCapacity > kTxFifoHeadroom) ? (txFifoCapacity - kTxFifoHeadroom) : txFifoCapacity;
   uint32_t txCount = (LPSPI4_FSR & LPSPI_FSR_TXCOUNT(0x1F)) / LPSPI_FSR_TXCOUNT(1);
-  while (txCount < txPrefillTarget && m_txFrameProgress < m_packetSize) {
-    g_spi.pushr(m_spiOutputBuffer[m_txFrameProgress++]);
+  while (txCount < txPrefillTarget) {
+    g_spi.pushr(m_spiOutputBuffer[m_txFrameProgress]);
+    m_txFrameProgress = static_cast<uint8_t>((m_txFrameProgress + 1U) % m_packetSize);
     ++txCount;
   }
-}
-
-void SPIConnection::resetAndPrimeTxFIFO() {
-  m_txFrameProgress = 0;
-  g_spi.resetTxFIFO();
-  g_spi.pushr(m_spiOutputBuffer[m_txFrameProgress++]);
-  primeTxFIFO();
 }
 
 void SPIConnection::printTCRRegisterDetail() const {
