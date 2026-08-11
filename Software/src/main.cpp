@@ -80,7 +80,7 @@ void setup() {
 
   // Spin up the reaction wheel controller (CAN)
   Serial.println("[main] Initialising Reaction Wheel Controller...");
-  wheelController.begin();
+  // wheelController.begin();
 
   // Spin up the OBC Link (SPI)
   Serial.println("[main] Initialising OBC SPI Link...");
@@ -107,7 +107,7 @@ void loop() {
   obcConnection.spiConnection().service();
 
   // Run sub-system loops
-  wheelController.update();
+  // wheelController.update();
   
   // Action any new instructions from the OBC
   if (obcConnection.hasNewCommand()) {

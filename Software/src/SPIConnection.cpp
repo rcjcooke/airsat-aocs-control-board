@@ -30,6 +30,7 @@ SPIConnection::SPIConnection(bool debugEnabled, uint8_t payloadSize)
       m_spiOutputBuffer{0},
       m_completedFrameBuffer{0},
       m_spiBufferIndex(0),
+      m_txFrameProgress(0),
       m_completedFrameReady(false),
       m_packetSynced(false),
       m_lastRxPayload{0},
@@ -56,6 +57,7 @@ void SPIConnection::begin() {
 
   m_state = State::Idle;
   m_spiBufferIndex = 0;
+  m_txFrameProgress = 1;
   m_completedFrameReady = false;
   m_packetSynced = false;
   m_uncheckedInterruptDebugData = false;
@@ -68,6 +70,7 @@ void SPIConnection::begin() {
   // Use the watermark to reduce interrupt calls
   LPSPI4_FCR = LPSPI_FCR_RXWATER(kRxInterruptWatermark) | LPSPI_FCR_TXWATER(0);
   asm volatile ("dsb");
+  primeTxFIFO();
   g_spi.onReceive(handleMessageISR);
 
   if (m_debugEnabled) {
@@ -265,92 +268,10 @@ void SPIConnection::handleMessage() {
 
   // 1. INTEGRATED RX DATA HANDLING PATH (RDIE)
   while (LPSPI4_SR & LPSPI_SR_RDF) {
-    uint32_t rawRegValue = g_spi.popr();
-    const uint8_t rxData = static_cast<uint8_t>(rawRegValue & 0xFF); 
-    // Serial.printf("[SPI] [DEBUG] RX Byte: 0x%08X\r\n", rawRegValue);
-
-    m_lastByteReceived = rxData;
-    ++m_totalBytesReceived;
-    if (!m_uncheckedInterruptDebugData) {
-      ++m_bytesReceivedInLastInterrupt;
-    }
-
-    // Hard bounds check to prevent any possibility of out-of-range buffer writes.
-    if (m_spiBufferIndex >= kMaxFrameSize || m_spiBufferIndex >= m_packetSize) {
-      ++m_syncDropCount;
-      m_packetSynced = false;
-      m_spiBufferIndex = 0;
-      continue;
-    }    
-
-    // --- RECEIVE STATE MACHINE ---
-    if (!m_packetSynced) {
-      m_state = State::Syncing;
-      
-      if (m_spiBufferIndex == 0) {
-        if (rxData == kSyncByte0) {
-          m_spiInputBuffer[0] = rxData;
-          m_spiBufferIndex = 1;
-        } else {
-          ++m_bytesLostSyncing;
-        }
-      } else if (m_spiBufferIndex == 1) {
-        if (rxData == kSyncByte1) {
-          m_spiInputBuffer[1] = rxData;
-          m_spiBufferIndex = 2;
-          m_packetSynced = true; // Clean frame lock achieved!
-        } else {
-          if (rxData == kSyncByte0) {
-            m_spiInputBuffer[0] = rxData;
-            m_spiBufferIndex = 1;
-          } else {
-            ++m_bytesLostSyncing;
-            m_spiBufferIndex = 0;
-          }
-        }
-      }
-    } else {
-      m_state = State::Transceiving;
-
-      // Guard again immediately before indexed store.
-      if (m_spiBufferIndex >= kMaxFrameSize || m_spiBufferIndex >= m_packetSize) {
-        ++m_syncDropCount;
-        m_packetSynced = false;
-        m_spiBufferIndex = 0;
-        continue;
-      }
-      m_spiInputBuffer[m_spiBufferIndex] = rxData;
-
-      if ((m_spiBufferIndex == 0 && rxData != kSyncByte0) || (m_spiBufferIndex == 1 && rxData != kSyncByte1)) {
-        ++m_syncDropCount;
-        m_spiBufferIndex = 0;
-        m_packetSynced = false;
-
-        LPSPI4_CR |= LPSPI_CR_RTF;
-        asm volatile ("dsb");
-        // g_spi.pushr(m_spiOutputBuffer[0]);
-      } else {
-        ++m_spiBufferIndex;
-
-        if (m_spiBufferIndex >= m_packetSize) {
-          if (m_completedFrameReady) {
-            ++m_completedFrameDropCount;
-          }
-          memcpy((void*)m_completedFrameBuffer, (const void*)m_spiInputBuffer, m_packetSize);
-          m_completedFrameReady = true;
-
-          memcpy((void*)m_spiOutputBuffer, (const void*)m_nextTxFrame, m_packetSize);
-          
-          m_spiBufferIndex = 0;
-          m_packetSynced = false;
-
-          LPSPI4_CR |= LPSPI_CR_RTF;
-          asm volatile ("dsb");
-          // g_spi.pushr(m_spiOutputBuffer[0]);
-        }
-      }
-    }
+    processReceivedByte(static_cast<uint8_t>(g_spi.popr() & 0xFF));
   }
+
+  primeTxFIFO();
 
   // 2. DETACHED TRANSMIT PIPELINE SERVICE (Services both mid-loop and trailing TDIE exits)
   // By tracking progress via txProgressIndex++, we guarantee that regardless of how 
@@ -383,6 +304,98 @@ void SPIConnection::handleMessage() {
     ++m_refsReceived;
   }
   m_uncheckedInterruptDebugData = true;
+}
+
+void SPIConnection::processReceivedByte(uint8_t rxData) {
+  m_lastByteReceived = rxData;
+  ++m_totalBytesReceived;
+  if (!m_uncheckedInterruptDebugData) {
+    ++m_bytesReceivedInLastInterrupt;
+  }
+
+  if (m_spiBufferIndex >= kMaxFrameSize || m_spiBufferIndex >= m_packetSize) {
+    ++m_syncDropCount;
+    m_packetSynced = false;
+    m_spiBufferIndex = 0;
+    return;
+  }
+
+  if (!m_packetSynced) {
+    m_state = State::Syncing;
+
+    if (m_spiBufferIndex == 0) {
+      if (rxData == kSyncByte0) {
+        m_spiInputBuffer[0] = rxData;
+        m_spiBufferIndex = 1;
+      } else {
+        ++m_bytesLostSyncing;
+      }
+      return;
+    }
+
+    if (m_spiBufferIndex == 1) {
+      if (rxData == kSyncByte1) {
+        m_spiInputBuffer[1] = rxData;
+        m_spiBufferIndex = 2;
+        m_packetSynced = true;
+      } else if (rxData == kSyncByte0) {
+        m_spiInputBuffer[0] = rxData;
+        m_spiBufferIndex = 1;
+      } else {
+        ++m_bytesLostSyncing;
+        m_spiBufferIndex = 0;
+      }
+    }
+    return;
+  }
+
+  m_state = State::Transceiving;
+  m_spiInputBuffer[m_spiBufferIndex] = rxData;
+
+  if ((m_spiBufferIndex == 0 && rxData != kSyncByte0) ||
+      (m_spiBufferIndex == 1 && rxData != kSyncByte1)) {
+    ++m_syncDropCount;
+    m_spiBufferIndex = 0;
+    m_packetSynced = false;
+    resetAndPrimeTxFIFO();
+    return;
+  }
+
+  ++m_spiBufferIndex;
+
+  if (m_spiBufferIndex >= m_packetSize) {
+    if (m_completedFrameReady) {
+      ++m_completedFrameDropCount;
+    }
+    memcpy((void*)m_completedFrameBuffer, (const void*)m_spiInputBuffer, m_packetSize);
+    m_completedFrameReady = true;
+
+    memcpy((void*)m_spiOutputBuffer, (const void*)m_nextTxFrame, m_packetSize);
+    m_spiBufferIndex = 0;
+    m_packetSynced = false;
+    resetAndPrimeTxFIFO();
+  }
+}
+
+void SPIConnection::primeTxFIFO() {
+  const uint32_t txFifoDepthEncoded = LPSPI4_PARAM & 0xFF;
+  const uint32_t txFifoCapacity = 1UL << txFifoDepthEncoded;
+  const uint32_t txPrefillTarget =
+      (static_cast<uint32_t>(kRxInterruptWatermark) + 5U < txFifoCapacity)
+          ? static_cast<uint32_t>(kRxInterruptWatermark) + 5U
+          : txFifoCapacity;
+  uint32_t txCount = (LPSPI4_FSR & LPSPI_FSR_TXCOUNT(0x1F)) / LPSPI_FSR_TXCOUNT(1);
+  while (txCount < txPrefillTarget && m_txFrameProgress < m_packetSize) {
+    g_spi.pushr(m_spiOutputBuffer[m_txFrameProgress++]);
+    ++txCount;
+  }
+}
+
+void SPIConnection::resetAndPrimeTxFIFO() {
+  m_txFrameProgress = 0;
+  g_spi.resetTxFIFO();
+  g_spi.pushr(m_spiOutputBuffer[m_txFrameProgress++]);
+  primeTxFIFO();
 }
 
 void SPIConnection::printTCRRegisterDetail() const {
