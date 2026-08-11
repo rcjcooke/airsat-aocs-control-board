@@ -2,6 +2,7 @@
 #define SPI_CONNECTION_H
 
 #include <Arduino.h>
+#include <atomic>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -15,6 +16,8 @@ class SPIConnection {
   static constexpr uint8_t kRxInterruptWatermark = 7; // RDF when RX FIFO has >= 8 bytes
   static constexpr uint8_t kMaxFrameSize = kMaxPayloadSize + kFrameOverhead;
   static constexpr uint8_t kTxFifoHeadroom = 1;
+  static constexpr uint8_t kFrameMailboxDepth = 2;
+  static constexpr uint8_t kTxFrameBufferDepth = 2;
 
   using PayloadReadyHandler = void (*)(const uint8_t* payload, uint8_t payloadSize);
 
@@ -78,44 +81,48 @@ class SPIConnection {
   void handleMessage();
   void processReceivedByte(uint8_t rxData);
   void primeTxFIFO();
-  void buildTxFrameFromPayload(const uint8_t* payload, size_t payloadSize);
+  void buildTxFrameFromPayload(const uint8_t* payload, size_t payloadSize, uint8_t* frameBuffer);
   void validateAndDispatchFrame(const uint8_t* frameData);
 
-  volatile bool m_isActive = false;
+  std::atomic<bool> m_isActive{false};
 
   bool m_debugEnabled;
   uint8_t m_payloadSize;
   uint8_t m_packetSize;
-  volatile State m_state;
+  std::atomic<State> m_state;
 
   uint8_t m_spiInputBuffer[kMaxFrameSize];
-  uint8_t m_spiOutputBuffer[kMaxFrameSize];
-  volatile uint8_t m_completedFrameBuffer[kMaxFrameSize];
+  uint8_t m_txFrameBuffers[kTxFrameBufferDepth][kMaxFrameSize];
+  uint8_t m_completedFrameBuffers[kFrameMailboxDepth][kMaxFrameSize];
   uint8_t m_spiBufferIndex;
   uint8_t m_txFrameProgress;
-  volatile bool m_completedFrameReady;
+  std::atomic<uint8_t> m_txActiveFrameIndex;
+  std::atomic<uint8_t> m_txPendingFrameIndex;
+  std::atomic<bool> m_txPendingFrameReady;
+  std::atomic<uint8_t> m_completedFrameReadIndex;
+  std::atomic<uint8_t> m_completedFrameWriteIndex;
+  std::atomic<bool> m_completedFrameReady;
 
   bool m_packetSynced;
-  volatile uint8_t m_lastRxPayload[kMaxPayloadSize];
+  uint8_t m_lastRxPayloadBuffers[kFrameMailboxDepth][kMaxPayloadSize];
+  std::atomic<uint8_t> m_lastRxPayloadIndex;
 
-  uint8_t m_nextTxFrame[kMaxFrameSize];
+  std::atomic<uint32_t> m_byteRxISRCalls;
+  std::atomic<uint32_t> m_CSRisingISRCalls;
+  std::atomic<uint32_t> m_lastByteReceived;
+  std::atomic<uint32_t> m_totalBytesReceived;
+  std::atomic<uint32_t> m_totalPacketsReceived;
+  std::atomic<uint32_t> m_checksumFailureCount;
+  std::atomic<uint32_t> m_syncDropCount;
+  std::atomic<uint32_t> m_bytesLostSyncing;
+  std::atomic<uint32_t> m_bytesReceivedInLastInterrupt;
+  std::atomic<bool> m_uncheckedInterruptDebugData;
+  std::atomic<uint32_t> m_fcfsReceived;
+  std::atomic<uint32_t> m_refsReceived;
+  std::atomic<uint32_t> m_txErrorCount;
+  std::atomic<uint32_t> m_completedFrameDropCount;
 
-  volatile uint32_t m_byteRxISRCalls;
-  volatile uint32_t m_CSRisingISRCalls;
-  volatile uint32_t m_lastByteReceived;
-  volatile uint32_t m_totalBytesReceived;
-  volatile uint32_t m_totalPacketsReceived;
-  volatile uint8_t m_checksumFailureCount;
-  volatile uint8_t m_syncDropCount;
-  volatile uint32_t m_bytesLostSyncing;
-  volatile uint32_t m_bytesReceivedInLastInterrupt;
-  volatile bool m_uncheckedInterruptDebugData;
-  volatile uint32_t m_fcfsReceived;
-  volatile uint32_t m_refsReceived;
-  volatile uint32_t m_txErrorCount;
-  volatile uint32_t m_completedFrameDropCount;
-
-  volatile PayloadReadyHandler m_payloadReadyHandler;
+  std::atomic<PayloadReadyHandler> m_payloadReadyHandler;
 
   static SPIConnection* s_instance;
 };

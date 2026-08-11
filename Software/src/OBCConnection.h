@@ -3,6 +3,7 @@
 #define OBC_CONNECTION_H
 
 #include <Arduino.h>
+#include <atomic>
 
 #include "SPIConnection.h"
 #include "AOCSControllerTelemetry.h"
@@ -26,6 +27,8 @@ struct TelemetryPayload {
 
 class OBCConnection {
  public:
+  static constexpr uint8_t kCommandMailboxDepth = 2;
+
   explicit OBCConnection(bool spiDebug = false,
                          uint8_t payloadSize = static_cast<uint8_t>(sizeof(CommandPayload)));
 
@@ -56,13 +59,15 @@ class OBCConnection {
   void queueTelemetryPayload();
 
   SPIConnection m_spiConnection;
-  CommandPayload m_verifiedCommand;
+  CommandPayload m_commandMailbox[kCommandMailboxDepth];
   TelemetryPayload m_telemetryPayload;
+  std::atomic<uint8_t> m_commandReadIndex;
+  std::atomic<uint8_t> m_commandWriteIndex;
 
-  volatile bool m_newCommandReady;
-  volatile uint8_t m_commandCount;
-  volatile uint8_t m_noOpCount;
-  volatile uint8_t m_malformedFrame;
+  std::atomic<bool> m_newCommandReady;
+  std::atomic<uint32_t> m_commandCount;
+  std::atomic<uint32_t> m_noOpCount;
+  std::atomic<uint32_t> m_malformedFrame;
 };
 
 #endif

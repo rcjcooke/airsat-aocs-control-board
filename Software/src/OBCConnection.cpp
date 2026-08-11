@@ -6,8 +6,10 @@ volatile OBCConnection* OBCConnection::s_instance = nullptr;
 
 OBCConnection::OBCConnection(bool spiDebug, uint8_t payloadSize)
     : m_spiConnection(spiDebug, payloadSize),
-      m_verifiedCommand{},
+  m_commandMailbox{},
       m_telemetryPayload{},
+  m_commandReadIndex(0),
+  m_commandWriteIndex(0),
       m_newCommandReady(false),
       m_commandCount(0),
       m_noOpCount(0),
@@ -16,11 +18,11 @@ OBCConnection::OBCConnection(bool spiDebug, uint8_t payloadSize)
 }
 
 void OBCConnection::begin() {
-  noInterrupts();
-  m_newCommandReady = false;
-  memset(&m_verifiedCommand, 0, sizeof(m_verifiedCommand));
+  m_newCommandReady.store(false, std::memory_order_relaxed);
+  m_commandReadIndex.store(0, std::memory_order_relaxed);
+  m_commandWriteIndex.store(0, std::memory_order_relaxed);
+  memset(&m_commandMailbox[0], 0, sizeof(m_commandMailbox));
   memset(&m_telemetryPayload, 0, sizeof(m_telemetryPayload));
-  interrupts();
 
   m_spiConnection.setPayloadReadyHandler(onPayloadReceivedCallbackISR);
   queueTelemetryPayload();
@@ -32,16 +34,17 @@ void OBCConnection::activateSPI() {
 }
 
 bool OBCConnection::hasNewCommand() const {
-  return m_newCommandReady;
+  return m_newCommandReady.load(std::memory_order_acquire);
 }
 
 CommandPayload OBCConnection::takeLatestCommand() {
-  noInterrupts(); // Stop SPI interrupts from breaking the copy
-  CommandPayload localCopy = m_verifiedCommand;
-  m_newCommandReady = false;
-  interrupts();   // Safe to resume interrupts
-  
-  return localCopy;
+  const bool hadCommand = m_newCommandReady.exchange(false, std::memory_order_acq_rel);
+  if (!hadCommand) {
+    return CommandPayload{};
+  }
+
+  const uint8_t readIndex = m_commandReadIndex.load(std::memory_order_acquire);
+  return m_commandMailbox[readIndex];
 }
 
 void OBCConnection::updateTelemetry(const AOCSControllerTelemetry& telemetry) {
@@ -52,9 +55,7 @@ void OBCConnection::updateTelemetry(const AOCSControllerTelemetry& telemetry) {
   obcTelemetry.error_count = rxErrorCount();
 
   // Switch it over
-  noInterrupts();
   m_telemetryPayload = obcTelemetry;
-  interrupts();
 
   queueTelemetryPayload();
 }
@@ -65,9 +66,7 @@ bool OBCConnection::isConnected() const {
 
 uint32_t OBCConnection::rxErrorCount() const {
   uint32_t chkSumErrors = m_spiConnection.checksumFailureCount();
-  noInterrupts();
-  uint32_t count = m_malformedFrame + chkSumErrors;
-  interrupts();
+  uint32_t count = m_malformedFrame.load(std::memory_order_relaxed) + chkSumErrors;
   return count;
 }
 
@@ -80,17 +79,15 @@ uint8_t OBCConnection::syncDropCount() const {
 }
 
 uint8_t OBCConnection::commandCount() const {
-  noInterrupts();
-  uint8_t count = m_commandCount;
-  interrupts();
-  return count;
+  return static_cast<uint8_t>(m_commandCount.load(std::memory_order_relaxed));
 }
 
 uint8_t OBCConnection::noOpCount() const {
-  noInterrupts();
-  uint8_t count = m_noOpCount;
-  interrupts();
-  return count;
+  return static_cast<uint8_t>(m_noOpCount.load(std::memory_order_relaxed));
+}
+
+uint8_t OBCConnection::malformedFrameCount() const {
+  return static_cast<uint8_t>(m_malformedFrame.load(std::memory_order_relaxed));
 }
 
 void OBCConnection::copyLastRxPayload(uint8_t* destinationBuffer, size_t maxBytes) const {
@@ -121,14 +118,17 @@ void OBCConnection::onPayloadReceivedISR(const uint8_t* payload, uint8_t payload
   CommandPayload incomingPayload;
   memcpy(&incomingPayload, payload, sizeof(incomingPayload));
 
-  if (incomingPayload.flags == 0x11) {
-    m_verifiedCommand = incomingPayload;
-    m_newCommandReady = true;
-    m_commandCount++;
-  } else if (incomingPayload.flags == 0x22) {
-    m_noOpCount++;
+  if (incomingPayload.flags == kCommandFrame) {
+    const uint8_t writeIndex = m_commandWriteIndex.load(std::memory_order_relaxed);
+    m_commandMailbox[writeIndex] = incomingPayload;
+    m_commandReadIndex.store(writeIndex, std::memory_order_release);
+    m_commandWriteIndex.store((writeIndex + 1U) % kCommandMailboxDepth, std::memory_order_relaxed);
+    m_newCommandReady.store(true, std::memory_order_release);
+    m_commandCount.fetch_add(1, std::memory_order_relaxed);
+  } else if (incomingPayload.flags == kNoOpFrame) {
+    m_noOpCount.fetch_add(1, std::memory_order_relaxed);
   } else {
-    m_malformedFrame++;
+    m_malformedFrame.fetch_add(1, std::memory_order_relaxed);
   }
 }
 

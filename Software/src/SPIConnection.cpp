@@ -27,15 +27,20 @@ SPIConnection::SPIConnection(bool debugEnabled, uint8_t payloadSize)
       m_packetSize(static_cast<uint8_t>(m_payloadSize + kFrameOverhead)),
       m_state(State::Idle),
       m_spiInputBuffer{0},
-      m_spiOutputBuffer{0},
-      m_completedFrameBuffer{0},
+      m_txFrameBuffers{0},
+      m_completedFrameBuffers{0},
       m_spiBufferIndex(0),
       m_txFrameProgress(0),
+      m_txActiveFrameIndex(0),
+      m_txPendingFrameIndex(0),
+      m_txPendingFrameReady(false),
+      m_completedFrameReadIndex(0),
+      m_completedFrameWriteIndex(0),
       m_completedFrameReady(false),
       m_packetSynced(false),
-      m_lastRxPayload{0},
-      m_nextTxFrame{0},
+      m_lastRxPayloadBuffers{0},
       m_byteRxISRCalls(0),
+      m_CSRisingISRCalls(0),
       m_lastByteReceived(0),
       m_totalBytesReceived(0),
       m_totalPacketsReceived(0),
@@ -49,24 +54,31 @@ SPIConnection::SPIConnection(bool debugEnabled, uint8_t payloadSize)
       m_txErrorCount(0),
       m_completedFrameDropCount(0),
       m_payloadReadyHandler(nullptr) {
-  buildTxFrameFromPayload(nullptr, 0);
+  buildTxFrameFromPayload(nullptr, 0, m_txFrameBuffers[0]);
+  memcpy(m_txFrameBuffers[1], m_txFrameBuffers[0], m_packetSize);
 }
 
 void SPIConnection::begin() {
   s_instance = this;
 
-  m_state = State::Idle;
+  m_state.store(State::Idle, std::memory_order_relaxed);
   m_spiBufferIndex = 0;
   m_txFrameProgress = 1;
-  m_completedFrameReady = false;
+  m_completedFrameReady.store(false, std::memory_order_relaxed);
+  m_completedFrameReadIndex.store(0, std::memory_order_relaxed);
+  m_completedFrameWriteIndex.store(0, std::memory_order_relaxed);
+  m_txActiveFrameIndex.store(0, std::memory_order_relaxed);
+  m_txPendingFrameIndex.store(0, std::memory_order_relaxed);
+  m_txPendingFrameReady.store(false, std::memory_order_relaxed);
+  m_lastRxPayloadIndex.store(0, std::memory_order_relaxed);
   m_packetSynced = false;
-  m_uncheckedInterruptDebugData = false;
-  m_isActive = false;
+  m_uncheckedInterruptDebugData.store(false, std::memory_order_relaxed);
+  m_isActive.store(false, std::memory_order_relaxed);
 
-  memcpy((void*)m_spiOutputBuffer, (const void*)m_nextTxFrame, m_packetSize);
+  m_txFrameProgress = 1;
   
   g_spi.setIERTriggerMode(true, false);
-  g_spi.begin(m_spiOutputBuffer[0]); // Start with the first output byte in the FIFO
+  g_spi.begin(m_txFrameBuffers[0][0]); // Start with the first output byte in the FIFO
   // Use the watermark to reduce interrupt calls
   LPSPI4_FCR = LPSPI_FCR_RXWATER(kRxInterruptWatermark) | LPSPI_FCR_TXWATER(0);
   asm volatile ("dsb");
@@ -79,7 +91,7 @@ void SPIConnection::begin() {
 }
 
 void SPIConnection::activate() {
-  m_isActive = true;
+  m_isActive.store(true, std::memory_order_release);
   if (m_debugEnabled) {
     Serial.println("[SPI] [DEBUG] Message processing activated");
   }
@@ -87,32 +99,25 @@ void SPIConnection::activate() {
 
 void SPIConnection::service() {
   uint8_t localFrame[kMaxFrameSize] = {0};
-  bool hasCompletedFrame = false;
-
-  noInterrupts();
-  if (m_completedFrameReady) {
-    memcpy(localFrame, (const void*)m_completedFrameBuffer, m_packetSize);
-    m_completedFrameReady = false;
-    hasCompletedFrame = true;
-  }
-  interrupts();
+  const bool hasCompletedFrame = m_completedFrameReady.exchange(false, std::memory_order_acq_rel);
 
   if (hasCompletedFrame) {
+    const uint8_t frameIndex = m_completedFrameReadIndex.load(std::memory_order_acquire);
+    memcpy(localFrame, m_completedFrameBuffers[frameIndex], m_packetSize);
     validateAndDispatchFrame(localFrame);
   }
 }
 
 void SPIConnection::setPayloadReadyHandler(PayloadReadyHandler handler) {
-  noInterrupts();
-  m_payloadReadyHandler = handler;
-  interrupts();
+  m_payloadReadyHandler.store(handler, std::memory_order_release);
 }
 
 void SPIConnection::setNextTxPayload(const uint8_t* payload, size_t payloadSize) {
-  noInterrupts();
-  buildTxFrameFromPayload(payload, payloadSize);
-  memcpy((void*)m_spiOutputBuffer, (const void*)m_nextTxFrame, m_packetSize);
-  interrupts();
+  const uint8_t activeIndex = m_txActiveFrameIndex.load(std::memory_order_acquire);
+  const uint8_t nextIndex = (activeIndex + 1U) % kTxFrameBufferDepth;
+  buildTxFrameFromPayload(payload, payloadSize, m_txFrameBuffers[nextIndex]);
+  m_txPendingFrameIndex.store(nextIndex, std::memory_order_release);
+  m_txPendingFrameReady.store(true, std::memory_order_release);
 }
 
 void SPIConnection::copyLastRxPayload(uint8_t* destination, size_t maxBytes) const {
@@ -122,18 +127,19 @@ void SPIConnection::copyLastRxPayload(uint8_t* destination, size_t maxBytes) con
 
   const size_t boundedSize = (maxBytes < m_payloadSize) ? maxBytes : m_payloadSize;
 
-  noInterrupts();
-  memcpy(destination, (const void*)m_lastRxPayload, boundedSize);
-  interrupts();
+  const uint8_t payloadIndex = m_lastRxPayloadIndex.load(std::memory_order_acquire);
+  memcpy(destination, m_lastRxPayloadBuffers[payloadIndex], boundedSize);
 }
 
 void SPIConnection::copyOutgoingTxFrame(uint8_t* destination, size_t maxBytes) const {
   if (destination == nullptr || maxBytes == 0) return;
   const size_t boundedSize = (maxBytes < m_packetSize) ? maxBytes : m_packetSize;
   
-  noInterrupts();
-  memcpy(destination, (const void*)m_spiOutputBuffer, boundedSize);
-  interrupts();
+  uint8_t frameIndex = m_txActiveFrameIndex.load(std::memory_order_acquire);
+  if (m_txPendingFrameReady.load(std::memory_order_acquire)) {
+    frameIndex = m_txPendingFrameIndex.load(std::memory_order_acquire);
+  }
+  memcpy(destination, m_txFrameBuffers[frameIndex], boundedSize);
 }
 
 uint8_t SPIConnection::payloadSize() const {
@@ -145,47 +151,36 @@ uint8_t SPIConnection::frameSize() const {
 }
 
 uint32_t SPIConnection::totalBytesReceived() const {
-  uint32_t totalBytes = 0;
-  noInterrupts();
-  totalBytes = m_totalBytesReceived;
-  interrupts();
-  return totalBytes;
+  return m_totalBytesReceived.load(std::memory_order_relaxed);
 }
 
 uint8_t SPIConnection::syncDropCount() const {
-  // 8-bit so no need for protection with interrupts
-  return m_syncDropCount;
+  return static_cast<uint8_t>(m_syncDropCount.load(std::memory_order_relaxed));
 }
 
 uint32_t SPIConnection::checksumFailureCount() const {
-  noInterrupts();
-  uint32_t count = m_checksumFailureCount;
-  interrupts();
-  return count;
+  return m_checksumFailureCount.load(std::memory_order_relaxed);
 }
 
 SPIConnection::Stats SPIConnection::statsSnapshot() const {
-  noInterrupts();
   const Stats snapshot = {
-      m_byteRxISRCalls,
-      m_CSRisingISRCalls,
-      m_lastByteReceived,
-      m_totalBytesReceived,
-      m_totalPacketsReceived,
-      m_bytesLostSyncing,
-      m_bytesReceivedInLastInterrupt,
-      m_fcfsReceived,
-      m_refsReceived,
-      m_txErrorCount,
-      m_checksumFailureCount,
-      m_completedFrameDropCount};
-  interrupts();
+      m_byteRxISRCalls.load(std::memory_order_relaxed),
+      m_CSRisingISRCalls.load(std::memory_order_relaxed),
+      m_lastByteReceived.load(std::memory_order_relaxed),
+      m_totalBytesReceived.load(std::memory_order_relaxed),
+      m_totalPacketsReceived.load(std::memory_order_relaxed),
+      m_bytesLostSyncing.load(std::memory_order_relaxed),
+      m_bytesReceivedInLastInterrupt.load(std::memory_order_relaxed),
+      m_fcfsReceived.load(std::memory_order_relaxed),
+      m_refsReceived.load(std::memory_order_relaxed),
+      m_txErrorCount.load(std::memory_order_relaxed),
+      m_checksumFailureCount.load(std::memory_order_relaxed),
+      m_completedFrameDropCount.load(std::memory_order_relaxed)};
   return snapshot;
 }
 
 SPIConnection::State SPIConnection::state() const {
-  // 8-bit so no need for protection with interrupts
-  return m_state;
+  return m_state.load(std::memory_order_relaxed);
 }
 
 uint16_t SPIConnection::calculateFletcher16(const uint8_t* data, size_t count) {
@@ -200,20 +195,24 @@ uint16_t SPIConnection::calculateFletcher16(const uint8_t* data, size_t count) {
   return static_cast<uint16_t>((sum2 << 8) | sum1);
 }
 
-void SPIConnection::buildTxFrameFromPayload(const uint8_t* payload, size_t payloadSize) {
-  const size_t boundedSize = (payloadSize < m_payloadSize) ? payloadSize : m_payloadSize;
-
-  memset(m_nextTxFrame, 0, m_packetSize);
-  m_nextTxFrame[0] = kSyncByte0;
-  m_nextTxFrame[1] = kSyncByte1;
-
-  if (payload != nullptr && boundedSize > 0) {
-    memcpy(&m_nextTxFrame[kSyncSize], payload, boundedSize);
+void SPIConnection::buildTxFrameFromPayload(const uint8_t* payload, size_t payloadSize, uint8_t* frameBuffer) {
+  if (frameBuffer == nullptr) {
+    return;
   }
 
-  const uint16_t checksum = calculateFletcher16(m_nextTxFrame, m_packetSize - kChecksumSize);
-  m_nextTxFrame[m_packetSize - 2] = static_cast<uint8_t>(checksum & 0xFF);
-  m_nextTxFrame[m_packetSize - 1] = static_cast<uint8_t>((checksum >> 8) & 0xFF);
+  const size_t boundedSize = (payloadSize < m_payloadSize) ? payloadSize : m_payloadSize;
+
+  memset(frameBuffer, 0, m_packetSize);
+  frameBuffer[0] = kSyncByte0;
+  frameBuffer[1] = kSyncByte1;
+
+  if (payload != nullptr && boundedSize > 0) {
+    memcpy(&frameBuffer[kSyncSize], payload, boundedSize);
+  }
+
+  const uint16_t checksum = calculateFletcher16(frameBuffer, m_packetSize - kChecksumSize);
+  frameBuffer[m_packetSize - 2] = static_cast<uint8_t>(checksum & 0xFF);
+  frameBuffer[m_packetSize - 1] = static_cast<uint8_t>((checksum >> 8) & 0xFF);
 }
 
 void SPIConnection::validateAndDispatchFrame(const uint8_t* frameData) {
@@ -228,22 +227,21 @@ void SPIConnection::validateAndDispatchFrame(const uint8_t* frameData) {
       (static_cast<uint16_t>(frameData[m_packetSize - 1]) << 8);
 
   if (calculatedChecksum != receivedChecksum) {
-    ++m_checksumFailureCount;
+    m_checksumFailureCount.fetch_add(1, std::memory_order_relaxed);
     return;
   }
 
-  noInterrupts();
-  memcpy((void*)m_lastRxPayload, (const void*)&frameData[kSyncSize], m_payloadSize);
-  PayloadReadyHandler handlerCopy = (PayloadReadyHandler)m_payloadReadyHandler;
-  const bool isActive = m_isActive;
-  interrupts();
+  const uint8_t currentPayloadIndex = m_lastRxPayloadIndex.load(std::memory_order_relaxed);
+  const uint8_t nextPayloadIndex = (currentPayloadIndex + 1U) % kFrameMailboxDepth;
+  memcpy(m_lastRxPayloadBuffers[nextPayloadIndex], &frameData[kSyncSize], m_payloadSize);
+  m_lastRxPayloadIndex.store(nextPayloadIndex, std::memory_order_release);
+
+  const PayloadReadyHandler handlerCopy = m_payloadReadyHandler.load(std::memory_order_acquire);
+  const bool isActive = m_isActive.load(std::memory_order_acquire);
 
   if (isActive && handlerCopy != nullptr) {
-    handlerCopy((const uint8_t*)m_lastRxPayload, m_payloadSize);
-
-    noInterrupts();
-    ++m_totalPacketsReceived;
-    interrupts();
+    handlerCopy(m_lastRxPayloadBuffers[nextPayloadIndex], m_payloadSize);
+    m_totalPacketsReceived.fetch_add(1, std::memory_order_relaxed);
   }
 }
 
@@ -254,16 +252,16 @@ void SPIConnection::handleMessageISR() {
 }
 
 void SPIConnection::handleMessage() {
-  ++m_byteRxISRCalls;
-  if (!m_uncheckedInterruptDebugData) {
-    m_bytesReceivedInLastInterrupt = 0;
+  m_byteRxISRCalls.fetch_add(1, std::memory_order_relaxed);
+  if (!m_uncheckedInterruptDebugData.load(std::memory_order_relaxed)) {
+    m_bytesReceivedInLastInterrupt.store(0, std::memory_order_relaxed);
   }
 
   // Defensive sanity: if configuration is ever corrupted, fail safe and avoid OOB.
   if (m_packetSize == 0 || m_packetSize > kMaxFrameSize) {
     m_packetSynced = false;
     m_spiBufferIndex = 0;
-    m_state = State::Idle;
+    m_state.store(State::Idle, std::memory_order_relaxed);
     return;
   }
 
@@ -291,45 +289,45 @@ void SPIConnection::handleMessage() {
   // 3. ERROR AND STICKY REGISTER MAINTENANCE
   if (LPSPI4_SR & LPSPI_SR_TEF) {
     LPSPI4_SR = LPSPI_SR_TEF; 
-    ++m_txErrorCount;
+    m_txErrorCount.fetch_add(1, std::memory_order_relaxed);
   }
   if (LPSPI4_SR & LPSPI_SR_WCF) {
     LPSPI4_SR = LPSPI_SR_WCF;
   }
   if (LPSPI4_SR & LPSPI_SR_FCF) {
     LPSPI4_SR = LPSPI_SR_FCF;
-    ++m_fcfsReceived;
+    m_fcfsReceived.fetch_add(1, std::memory_order_relaxed);
   }
   if (LPSPI4_SR & LPSPI_SR_REF) {
     LPSPI4_SR = LPSPI_SR_REF;
-    ++m_refsReceived;
+    m_refsReceived.fetch_add(1, std::memory_order_relaxed);
   }
-  m_uncheckedInterruptDebugData = true;
+  m_uncheckedInterruptDebugData.store(true, std::memory_order_relaxed);
 }
 
 void SPIConnection::processReceivedByte(uint8_t rxData) {
-  m_lastByteReceived = rxData;
-  ++m_totalBytesReceived;
-  if (!m_uncheckedInterruptDebugData) {
-    ++m_bytesReceivedInLastInterrupt;
+  m_lastByteReceived.store(rxData, std::memory_order_relaxed);
+  m_totalBytesReceived.fetch_add(1, std::memory_order_relaxed);
+  if (!m_uncheckedInterruptDebugData.load(std::memory_order_relaxed)) {
+    m_bytesReceivedInLastInterrupt.fetch_add(1, std::memory_order_relaxed);
   }
 
   if (m_spiBufferIndex >= kMaxFrameSize || m_spiBufferIndex >= m_packetSize) {
-    ++m_syncDropCount;
+    m_syncDropCount.fetch_add(1, std::memory_order_relaxed);
     m_packetSynced = false;
     m_spiBufferIndex = 0;
     return;
   }
 
   if (!m_packetSynced) {
-    m_state = State::Syncing;
+    m_state.store(State::Syncing, std::memory_order_relaxed);
 
     if (m_spiBufferIndex == 0) {
       if (rxData == kSyncByte0) {
         m_spiInputBuffer[0] = rxData;
         m_spiBufferIndex = 1;
       } else {
-        ++m_bytesLostSyncing;
+        m_bytesLostSyncing.fetch_add(1, std::memory_order_relaxed);
       }
       return;
     }
@@ -343,19 +341,19 @@ void SPIConnection::processReceivedByte(uint8_t rxData) {
         m_spiInputBuffer[0] = rxData;
         m_spiBufferIndex = 1;
       } else {
-        ++m_bytesLostSyncing;
+        m_bytesLostSyncing.fetch_add(1, std::memory_order_relaxed);
         m_spiBufferIndex = 0;
       }
     }
     return;
   }
 
-  m_state = State::Transceiving;
+  m_state.store(State::Transceiving, std::memory_order_relaxed);
   m_spiInputBuffer[m_spiBufferIndex] = rxData;
 
   if ((m_spiBufferIndex == 0 && rxData != kSyncByte0) ||
       (m_spiBufferIndex == 1 && rxData != kSyncByte1)) {
-    ++m_syncDropCount;
+    m_syncDropCount.fetch_add(1, std::memory_order_relaxed);
     m_spiBufferIndex = 0;
     m_packetSynced = false;
     return;
@@ -364,11 +362,16 @@ void SPIConnection::processReceivedByte(uint8_t rxData) {
   ++m_spiBufferIndex;
 
   if (m_spiBufferIndex >= m_packetSize) {
-    if (m_completedFrameReady) {
-      ++m_completedFrameDropCount;
+    if (m_completedFrameReady.load(std::memory_order_acquire)) {
+      m_completedFrameDropCount.fetch_add(1, std::memory_order_relaxed);
     }
-    memcpy((void*)m_completedFrameBuffer, (const void*)m_spiInputBuffer, m_packetSize);
-    m_completedFrameReady = true;
+
+    const uint8_t writeIndex = m_completedFrameWriteIndex.load(std::memory_order_relaxed);
+    memcpy(m_completedFrameBuffers[writeIndex], m_spiInputBuffer, m_packetSize);
+    m_completedFrameReadIndex.store(writeIndex, std::memory_order_release);
+    m_completedFrameReady.store(true, std::memory_order_release);
+    m_completedFrameWriteIndex.store((writeIndex + 1U) % kFrameMailboxDepth, std::memory_order_relaxed);
+
     m_spiBufferIndex = 0;
     m_packetSynced = false;
   }
@@ -380,8 +383,16 @@ void SPIConnection::primeTxFIFO() {
   const uint32_t txPrefillTarget =
       (txFifoCapacity > kTxFifoHeadroom) ? (txFifoCapacity - kTxFifoHeadroom) : txFifoCapacity;
   uint32_t txCount = (LPSPI4_FSR & LPSPI_FSR_TXCOUNT(0x1F)) / LPSPI_FSR_TXCOUNT(1);
+  uint8_t activeFrameIndex = m_txActiveFrameIndex.load(std::memory_order_acquire);
+
   while (txCount < txPrefillTarget) {
-    g_spi.pushr(m_spiOutputBuffer[m_txFrameProgress]);
+    if (m_txFrameProgress == 0U && m_txPendingFrameReady.load(std::memory_order_acquire)) {
+      activeFrameIndex = m_txPendingFrameIndex.load(std::memory_order_acquire);
+      m_txActiveFrameIndex.store(activeFrameIndex, std::memory_order_release);
+      m_txPendingFrameReady.store(false, std::memory_order_release);
+    }
+
+    g_spi.pushr(m_txFrameBuffers[activeFrameIndex][m_txFrameProgress]);
     m_txFrameProgress = static_cast<uint8_t>((m_txFrameProgress + 1U) % m_packetSize);
     ++txCount;
   }
