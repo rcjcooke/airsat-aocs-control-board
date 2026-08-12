@@ -85,16 +85,16 @@ uint8_t OBCConnection::syncDropCount() const {
   return m_spiConnection.syncDropCount();
 }
 
-uint8_t OBCConnection::commandCount() const {
-  return static_cast<uint8_t>(m_commandCount);
+uint32_t OBCConnection::commandCount() const {
+  return m_commandCount;
 }
 
-uint8_t OBCConnection::noOpCount() const {
-  return static_cast<uint8_t>(m_noOpCount);
+uint32_t OBCConnection::noOpCount() const {
+  return m_noOpCount;
 }
 
-uint8_t OBCConnection::malformedFrameCount() const {
-  return static_cast<uint8_t>(m_malformedFrame);
+uint32_t OBCConnection::malformedFrameCount() const {
+  return m_malformedFrame;
 }
 
 uint32_t OBCConnection::discardedCommandsCount() const {

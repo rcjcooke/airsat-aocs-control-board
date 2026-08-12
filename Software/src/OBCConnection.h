@@ -41,9 +41,9 @@ class OBCConnection {
   uint32_t rxErrorCount() const;
   uint32_t totalBytesReceived() const;
   uint8_t syncDropCount() const;
-  uint8_t commandCount() const;
-  uint8_t noOpCount() const;
-  uint8_t malformedFrameCount() const;
+  uint32_t commandCount() const;
+  uint32_t noOpCount() const;
+  uint32_t malformedFrameCount() const;
   uint32_t discardedCommandsCount() const;
   
   void copyLastRxPayload(uint8_t* destinationBuffer, size_t maxBytes) const;
