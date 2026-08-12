@@ -30,6 +30,7 @@ void ReactionWheel::begin() {
     m_status.rwMode = RWMode::kRunning;
     m_status.rwFault = RWFault::kNoFault;
   } else {
+    // Got no reply from the Moteus controller, so set the fault state
     m_status.rwMode = RWMode::kFault;
     m_status.rwFault = RWFault::kCommunicationError;
   }
