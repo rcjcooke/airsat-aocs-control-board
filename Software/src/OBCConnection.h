@@ -3,7 +3,6 @@
 #define OBC_CONNECTION_H
 
 #include <Arduino.h>
-#include <atomic>
 
 #include "SPIConnection.h"
 #include "AOCSControllerTelemetry.h"
@@ -54,7 +53,7 @@ class OBCConnection {
   static constexpr uint8_t kCommandFrame = 0x11;
   static constexpr uint8_t kNoOpFrame = 0x22;
 
-  static volatile OBCConnection* s_instance;
+  static OBCConnection* s_instance;
   static void onPayloadReceivedCallbackISR(const uint8_t* payload, uint8_t payloadSize);
 
   void onPayloadReceivedISR(const uint8_t* payload, uint8_t payloadSize);
@@ -63,16 +62,16 @@ class OBCConnection {
   SPIConnection m_spiConnection;
   CommandPayload m_commandMailbox[kCommandMailboxDepth];
   TelemetryPayload m_telemetryPayload;
-  std::atomic<uint8_t> m_commandReadIndex;
-  std::atomic<uint8_t> m_commandWriteIndex;
+  uint8_t m_commandReadIndex;
+  uint8_t m_commandWriteIndex;
 
-  std::atomic<bool> m_newCommandReady;
-  std::atomic<uint32_t> m_commandCount;
-  std::atomic<uint32_t> m_noOpCount;
-  std::atomic<uint32_t> m_malformedFrame;
-  std::atomic<uint32_t> m_discardedCommandsCount;
+  bool m_newCommandReady;
+  uint32_t m_commandCount;
+  uint32_t m_noOpCount;
+  uint32_t m_malformedFrame;
+  uint32_t m_discardedCommandsCount;
   CommandPayload m_lastReceivedCommand;
-  std::atomic<bool> m_hasLastReceivedCommand;
+  bool m_hasLastReceivedCommand;
 };
 
 #endif

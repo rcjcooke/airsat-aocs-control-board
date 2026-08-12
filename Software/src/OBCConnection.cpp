@@ -2,7 +2,7 @@
 
 #include <string.h>
 
-volatile OBCConnection* OBCConnection::s_instance = nullptr;
+OBCConnection* OBCConnection::s_instance = nullptr;
 
 OBCConnection::OBCConnection(bool spiDebug, uint8_t payloadSize)
     : m_spiConnection(spiDebug, payloadSize),
@@ -13,19 +13,19 @@ OBCConnection::OBCConnection(bool spiDebug, uint8_t payloadSize)
       m_newCommandReady(false),
       m_commandCount(0),
       m_noOpCount(0),
-  m_malformedFrame(0),
-  m_discardedCommandsCount(0),
-  m_lastReceivedCommand{},
-  m_hasLastReceivedCommand(false) {
+      m_malformedFrame(0),
+      m_discardedCommandsCount(0),
+      m_lastReceivedCommand{},
+      m_hasLastReceivedCommand(false) {
       s_instance = this;
 }
 
 void OBCConnection::begin() {
-  m_newCommandReady.store(false, std::memory_order_relaxed);
-  m_commandReadIndex.store(0, std::memory_order_relaxed);
-  m_commandWriteIndex.store(0, std::memory_order_relaxed);
-  m_discardedCommandsCount.store(0, std::memory_order_relaxed);
-  m_hasLastReceivedCommand.store(false, std::memory_order_relaxed);
+  m_newCommandReady = false;
+  m_commandReadIndex = 0;
+  m_commandWriteIndex = 0;
+  m_discardedCommandsCount = 0;
+  m_hasLastReceivedCommand = false;
   memset(&m_commandMailbox[0], 0, sizeof(m_commandMailbox));
   memset(&m_lastReceivedCommand, 0, sizeof(m_lastReceivedCommand));
   memset(&m_telemetryPayload, 0, sizeof(m_telemetryPayload));
@@ -40,16 +40,17 @@ void OBCConnection::activateSPI() {
 }
 
 bool OBCConnection::hasNewCommand() const {
-  return m_newCommandReady.load(std::memory_order_acquire);
+  return m_newCommandReady;
 }
 
 CommandPayload OBCConnection::takeLatestCommand() {
-  const bool hadCommand = m_newCommandReady.exchange(false, std::memory_order_acq_rel);
+  const bool hadCommand = m_newCommandReady;
+  m_newCommandReady = false;
   if (!hadCommand) {
     return CommandPayload{};
   }
 
-  const uint8_t readIndex = m_commandReadIndex.load(std::memory_order_acquire);
+  const uint8_t readIndex = m_commandReadIndex;
   return m_commandMailbox[readIndex];
 }
 
@@ -72,7 +73,7 @@ bool OBCConnection::isConnected() const {
 
 uint32_t OBCConnection::rxErrorCount() const {
   uint32_t chkSumErrors = m_spiConnection.checksumFailureCount();
-  uint32_t count = m_malformedFrame.load(std::memory_order_relaxed) + chkSumErrors;
+  uint32_t count = m_malformedFrame + chkSumErrors;
   return count;
 }
 
@@ -85,19 +86,19 @@ uint8_t OBCConnection::syncDropCount() const {
 }
 
 uint8_t OBCConnection::commandCount() const {
-  return static_cast<uint8_t>(m_commandCount.load(std::memory_order_relaxed));
+  return static_cast<uint8_t>(m_commandCount);
 }
 
 uint8_t OBCConnection::noOpCount() const {
-  return static_cast<uint8_t>(m_noOpCount.load(std::memory_order_relaxed));
+  return static_cast<uint8_t>(m_noOpCount);
 }
 
 uint8_t OBCConnection::malformedFrameCount() const {
-  return static_cast<uint8_t>(m_malformedFrame.load(std::memory_order_relaxed));
+  return static_cast<uint8_t>(m_malformedFrame);
 }
 
 uint32_t OBCConnection::discardedCommandsCount() const {
-  return m_discardedCommandsCount.load(std::memory_order_relaxed);
+  return m_discardedCommandsCount;
 }
 
 void OBCConnection::copyLastRxPayload(uint8_t* destinationBuffer, size_t maxBytes) const {
@@ -113,7 +114,7 @@ SPIConnection& OBCConnection::spiConnection() {
 }
 
 void OBCConnection::onPayloadReceivedCallbackISR(const uint8_t* payload, uint8_t payloadSize) {
-  OBCConnection* localInstance = (OBCConnection*)s_instance;
+  OBCConnection* localInstance = s_instance;
   
   if (localInstance != nullptr) {
     localInstance->onPayloadReceivedISR(payload, payloadSize);
@@ -129,28 +130,28 @@ void OBCConnection::onPayloadReceivedISR(const uint8_t* payload, uint8_t payload
   memcpy(&incomingPayload, payload, sizeof(incomingPayload));
 
   if (incomingPayload.flags == kCommandFrame) {
-    const bool hasLast = m_hasLastReceivedCommand.load(std::memory_order_acquire);
+    const bool hasLast = m_hasLastReceivedCommand;
     const bool isDuplicate =
         hasLast && (memcmp(&incomingPayload, &m_lastReceivedCommand, sizeof(CommandPayload)) == 0);
 
     m_lastReceivedCommand = incomingPayload;
-    m_hasLastReceivedCommand.store(true, std::memory_order_release);
+    m_hasLastReceivedCommand = true;
 
     if (isDuplicate) {
-      m_discardedCommandsCount.fetch_add(1, std::memory_order_relaxed);
+      ++m_discardedCommandsCount;
       return;
     }
 
-    const uint8_t writeIndex = m_commandWriteIndex.load(std::memory_order_relaxed);
+    const uint8_t writeIndex = m_commandWriteIndex;
     m_commandMailbox[writeIndex] = incomingPayload;
-    m_commandReadIndex.store(writeIndex, std::memory_order_release);
-    m_commandWriteIndex.store((writeIndex + 1U) % kCommandMailboxDepth, std::memory_order_relaxed);
-    m_newCommandReady.store(true, std::memory_order_release);
-    m_commandCount.fetch_add(1, std::memory_order_relaxed);
+    m_commandReadIndex = writeIndex;
+    m_commandWriteIndex = (writeIndex + 1U) % kCommandMailboxDepth;
+    m_newCommandReady = true;
+    ++m_commandCount;
   } else if (incomingPayload.flags == kNoOpFrame) {
-    m_noOpCount.fetch_add(1, std::memory_order_relaxed);
+    ++m_noOpCount;
   } else {
-    m_malformedFrame.fetch_add(1, std::memory_order_relaxed);
+    ++m_malformedFrame;
   }
 }
 
