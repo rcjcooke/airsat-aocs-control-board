@@ -5,7 +5,7 @@
 #include "OBCConnection.h"
 #include "ReactionWheel.h"
 
-#define SPI_DEBUG true
+#define SPI_DEBUG false
 
 // The connection to the OBC (SPI)
 OBCConnection obcConnection = OBCConnection(SPI_DEBUG);
@@ -80,7 +80,7 @@ void setup() {
 
   // Spin up the reaction wheel controller (CAN)
   Serial.println("[main] Initialising Reaction Wheel Controller...");
-  // wheelController.begin();
+  wheelController.begin();
 
   // Spin up the OBC Link (SPI)
   Serial.println("[main] Initialising OBC SPI Link...");
@@ -107,7 +107,7 @@ void loop() {
   obcConnection.spiConnection().service();
 
   // Run sub-system loops
-  // wheelController.update();
+  wheelController.update();
   
   // Action any new instructions from the OBC
   if (obcConnection.hasNewCommand()) {
@@ -177,8 +177,9 @@ void loop() {
                     spiStats.refsReceived,
                     spiStats.txErrorCount);
 
-      Serial.printf("[main] [SPI] [DEBUG] Total Packets RX: %u | Bytes lost syncing: %u | Total checksum failures: %u | Completed frame drops: %u\r\n",
+      Serial.printf("[main] [SPI] [DEBUG] Total Packets RX: %u | Discarded identical commands: %u | Bytes lost syncing: %u | Total checksum failures: %u | Completed frame drops: %u\r\n",
                     spiStats.totalPacketsReceived,
+                    obcConnection.discardedCommandsCount(),
                     spiStats.bytesLostSyncing,
                     spiStats.checksumFailureCount,
                     spiStats.completedFrameDropCount);

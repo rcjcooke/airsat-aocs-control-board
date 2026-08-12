@@ -45,6 +45,8 @@ class OBCConnection {
   uint8_t commandCount() const;
   uint8_t noOpCount() const;
   uint8_t malformedFrameCount() const;
+  uint32_t discardedCommandsCount() const;
+  
   void copyLastRxPayload(uint8_t* destinationBuffer, size_t maxBytes) const;
   SPIConnection& spiConnection();
 
@@ -68,6 +70,9 @@ class OBCConnection {
   std::atomic<uint32_t> m_commandCount;
   std::atomic<uint32_t> m_noOpCount;
   std::atomic<uint32_t> m_malformedFrame;
+  std::atomic<uint32_t> m_discardedCommandsCount;
+  CommandPayload m_lastReceivedCommand;
+  std::atomic<bool> m_hasLastReceivedCommand;
 };
 
 #endif
