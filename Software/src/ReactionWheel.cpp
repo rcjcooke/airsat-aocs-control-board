@@ -103,6 +103,12 @@ void ReactionWheel::update() {
       // Using Begin rather than Set to avoid blocking calls.
       m_moteus->BeginPosition(cmd);
       
+      if (kDebug) {
+        Serial.printf("[RW] [DEBUG] ReactionWheel::update() - Sent command: velocity = %.2f Hz, acceleration limit = %.2f Hz/s\r\n",
+                      m_lastCommanded.targetVelocity,
+                      m_lastCommanded.accelerationLimit);
+      }
+
     }
   }
 

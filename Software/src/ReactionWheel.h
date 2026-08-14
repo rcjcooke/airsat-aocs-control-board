@@ -23,6 +23,8 @@ namespace Constants {
 class ReactionWheel {
 public:
 
+  static constexpr bool kDebug = true;
+
   enum class RWMode : uint8_t {
     kStopped = 0,
     kRunning = 1,
