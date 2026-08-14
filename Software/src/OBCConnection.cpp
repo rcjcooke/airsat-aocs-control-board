@@ -39,6 +39,10 @@ void OBCConnection::activateSPI() {
   m_spiConnection.activate();
 }
 
+void OBCConnection::service() {
+  m_spiConnection.service();
+}
+
 bool OBCConnection::hasNewCommand() const {
   return m_newCommandReady;
 }
@@ -57,7 +61,7 @@ CommandPayload OBCConnection::takeLatestCommand() {
 void OBCConnection::updateTelemetry(const AOCSControllerTelemetry& telemetry) {
   // Create a new telemetry payload based on the provided AOCSControllerTelemetry data
   TelemetryPayload obcTelemetry;
-  obcTelemetry.momentum = telemetry.wheelStoredAngularMomentumKGM2S;
+  obcTelemetry.storedAngularMomentum = telemetry.wheelStoredAngularMomentumKGM2S;
   obcTelemetry.propellant = static_cast<uint16_t>(telemetry.thrustersPropellantRemainingKg);
   obcTelemetry.error_count = rxErrorCount();
 

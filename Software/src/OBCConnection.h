@@ -6,23 +6,7 @@
 
 #include "SPIConnection.h"
 #include "AOCSControllerTelemetry.h"
-
-#pragma pack(push, 1)
-struct CommandPayload {
-  float torque;
-  float thrust[4];
-  uint8_t flags;         
-  uint8_t alignment_pad;  
-}; // Total Size: 22 bytes
-
-// TODO: Fix this up with the right data and make it more efficient
-struct TelemetryPayload {
-  float momentum;       // 4 bytes
-  uint16_t propellant;  // 2 bytes
-  uint16_t error_count; // 2 bytes
-  uint8_t padding[14];
-}; // Total Size: 4 + 2 + 2 + 14 = 22 bytes
-#pragma pack(pop)
+#include "AOCSPacketStructures.h"
 
 class OBCConnection {
  public:
@@ -33,6 +17,7 @@ class OBCConnection {
 
   void begin();
   void activateSPI();
+  void service();
   bool hasNewCommand() const;
   CommandPayload takeLatestCommand();
   void updateTelemetry(const AOCSControllerTelemetry& telemetry);

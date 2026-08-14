@@ -6,12 +6,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "AOCSPacketStructures.h"
+
 class SPIConnection {
  public:
-  static constexpr uint8_t kSyncSize = 2;
-  static constexpr uint8_t kChecksumSize = 2;
+  static constexpr uint8_t kSyncSize = AOCSPacketConstants::kSyncSize;
+  static constexpr uint8_t kChecksumSize = AOCSPacketConstants::kChecksumSize;
   static constexpr uint8_t kFrameOverhead = kSyncSize + kChecksumSize;
-  static constexpr uint8_t kDefaultPayloadSize = 22;
+  static constexpr uint8_t kDefaultPayloadSize = AOCSPacketConstants::kCommandPayloadSize;
   static constexpr uint8_t kMaxPayloadSize = 60;
   static constexpr uint8_t kRxInterruptWatermark = 7; // RDF when RX FIFO has >= 8 bytes
   static constexpr uint8_t kMaxFrameSize = kMaxPayloadSize + kFrameOverhead;
@@ -72,8 +74,8 @@ class SPIConnection {
   void spiRegisterAudit() const;
 
  private:
-  static constexpr uint8_t kSyncByte0 = 0xAA;
-  static constexpr uint8_t kSyncByte1 = 0x55;
+  static constexpr uint8_t kSyncByte0 = AOCSPacketConstants::kSyncByte0;
+  static constexpr uint8_t kSyncByte1 = AOCSPacketConstants::kSyncByte1;
 
   static uint16_t calculateFletcher16(const uint8_t* data, size_t count);
 
