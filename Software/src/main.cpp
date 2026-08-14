@@ -72,10 +72,9 @@ void setup() {
 
   // Spin up CAN interface
   const uint32_t errorCode = ACAN_T4::can3.beginFD(canSettings);
-  if (errorCode != 0) {
-    Serial.printf("Teensy CAN3 Hardware Failed: 0x%X\r\n", errorCode);
-    // TODO: Handle errors better than this!!!
-    while (1);
+  while (errorCode != 0) {
+    Serial.printf("[main] [ERROR] CAN3 startup error 0x%X. Trying again in 1 second.\r\n", errorCode);
+    delay(1000);
   }
 
   // Spin up the reaction wheel controller (CAN)
@@ -86,8 +85,6 @@ void setup() {
   Serial.println("[main] Initialising OBC SPI Link...");
   obcConnection.updateTelemetry(currentTelemetry); // Must set telemetry before calling begin() so that the first frame is valid
   obcConnection.begin();
-
-  // Finally - start processing OBC messages once we know everything is up and running
   obcConnection.activateSPI();
 
   // Print out some debug if needed
@@ -102,13 +99,14 @@ void setup() {
   }
 }
 
-void loop() {
-  // Keep SPI ISR lean: process completed frames in thread context.
-  obcConnection.spiConnection().service();
-
-  // Run sub-system loops
+void updateSubSystems() {
+  // Service the SPI connection to the OBC
+  obcConnection.service();
+  // Send commands / poll the reaction wheel controller
   wheelController.update();
-  
+}
+
+void executeInstructions() {
   // Action any new instructions from the OBC
   if (obcConnection.hasNewCommand()) {
     CommandPayload workingCommand = obcConnection.takeLatestCommand();
@@ -116,34 +114,27 @@ void loop() {
     wheelController.setTargetTorque(workingCommand.torque);
     currentTelemetry.aocsTargetTorqueNM = wheelController.getTargetTorque();
   }
+}
 
-  // Local telemetry refresh
-  static uint32_t telemetryTimer = 0;
-  if (millis() - telemetryTimer >= 100) { 
-    telemetryTimer = millis();
+void refreshTelemetry() {
+  // Reaction wheel stats
+  currentTelemetry.wheelStoredAngularMomentumKGM2S = wheelController.getAngularMomentum();
+  currentTelemetry.wheelMode = static_cast<uint8_t>(wheelController.status().rwMode);
+  currentTelemetry.wheelFault = static_cast<uint8_t>(wheelController.status().rwFault);
+  currentTelemetry.wheelTargetAccelerationRADSS = wheelController.getTargetAngularAcceleration();
+  // OBC Link stats
+  currentTelemetry.obcSyncDropCount = obcConnection.syncDropCount();
+  currentTelemetry.obcCommandsRXCount = obcConnection.commandCount();
+  currentTelemetry.obcNoOpCount = obcConnection.noOpCount();
+  currentTelemetry.obcConnected = obcConnection.isConnected();
+  currentTelemetry.obcRxErrorCount = obcConnection.rxErrorCount();
+  currentTelemetry.obcTotalBytesReceived = obcConnection.totalBytesReceived();
 
-    // Reaction wheel stats
-    currentTelemetry.wheelStoredAngularMomentumKGM2S = wheelController.getAngularMomentum();
-    currentTelemetry.wheelMode = static_cast<uint8_t>(wheelController.status().rwMode);
-    currentTelemetry.wheelFault = static_cast<uint8_t>(wheelController.status().rwFault);
-    currentTelemetry.wheelTargetAccelerationRADSS = wheelController.getTargetAngularAcceleration();
-    // OBC Link stats
-    currentTelemetry.obcSyncDropCount = obcConnection.syncDropCount();
-    currentTelemetry.obcCommandsRXCount = obcConnection.commandCount();
-    currentTelemetry.obcNoOpCount = obcConnection.noOpCount();
-    currentTelemetry.obcConnected = obcConnection.isConnected();
-    currentTelemetry.obcRxErrorCount = obcConnection.rxErrorCount();
-    currentTelemetry.obcTotalBytesReceived = obcConnection.totalBytesReceived();
+  // Update OBC link with telemetry ready for next data transfer
+  obcConnection.updateTelemetry(currentTelemetry);
+}
 
-    // Update OBC link with telemetry ready for next data transfer
-    obcConnection.updateTelemetry(currentTelemetry);
-  }
-
-  // Diagnostics and printing
-  static uint32_t diagnosticTimer = 0;
-  if (millis() - diagnosticTimer >= 1000) {
-    diagnosticTimer = millis();
-
+void printDiagnostics() {
     Serial.printf("[main] [OBC] Link state: %s | Commands RX: %u | No-Ops RX: %u | RX errors: %u | Sync drops: %u\r\n",
                   obcConnection.isConnected() ? "Connected" : "DISCONNECTED",
                   obcConnection.commandCount(),
@@ -200,6 +191,26 @@ void loop() {
       }
       Serial.println();
     }
-    
+}
+
+void loop() {
+  // Process all updates across sub-systems
+  updateSubSystems();
+
+  // Execute any new instructions from the OBC
+  executeInstructions();
+
+  // Local telemetry refresh
+  static uint32_t telemetryTimer = 0;
+  if (millis() - telemetryTimer >= 100) { 
+    telemetryTimer = millis();
+    refreshTelemetry();
+  }
+
+  // Diagnostics and printing
+  static uint32_t diagnosticTimer = 0;
+  if (millis() - diagnosticTimer >= 1000) {
+    diagnosticTimer = millis();
+    printDiagnostics();
   }
 }
