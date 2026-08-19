@@ -85,15 +85,10 @@ void SPIConnection::begin() {
   primeTxFIFO();
   g_spi.onReceive(handleMessageISR);
 
+  m_isActive.store(true, std::memory_order_release);
+
   if (m_debugEnabled) {
     Serial.println("[SPI] [DEBUG] Transport initialised");
-  }
-}
-
-void SPIConnection::activate() {
-  m_isActive.store(true, std::memory_order_release);
-  if (m_debugEnabled) {
-    Serial.println("[SPI] [DEBUG] Message processing activated");
   }
 }
 

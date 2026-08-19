@@ -13,7 +13,7 @@ OBCConnection::OBCConnection(bool spiDebug, uint8_t payloadSize)
       m_newCommandReady(false),
       m_commandCount(0),
       m_noOpCount(0),
-      m_malformedFrame(0),
+      m_malformedPacketCount(0),
       m_discardedCommandsCount(0),
       m_lastReceivedCommand{},
       m_hasLastReceivedCommand(false) {
@@ -33,10 +33,6 @@ void OBCConnection::begin() {
   m_spiConnection.setPayloadReadyHandler(onPayloadReceivedCallbackISR);
   queueTelemetryPayload();
   m_spiConnection.begin();
-}
-
-void OBCConnection::activateSPI() {
-  m_spiConnection.activate();
 }
 
 void OBCConnection::service() {
@@ -77,7 +73,7 @@ bool OBCConnection::isConnected() const {
 
 uint32_t OBCConnection::rxErrorCount() const {
   uint32_t chkSumErrors = m_spiConnection.checksumFailureCount();
-  uint32_t count = m_malformedFrame + chkSumErrors;
+  uint32_t count = m_malformedPacketCount + chkSumErrors;
   return count;
 }
 
@@ -97,8 +93,8 @@ uint32_t OBCConnection::noOpCount() const {
   return m_noOpCount;
 }
 
-uint32_t OBCConnection::malformedFrameCount() const {
-  return m_malformedFrame;
+uint32_t OBCConnection::malformedPacketCount() const {
+  return m_malformedPacketCount;
 }
 
 uint32_t OBCConnection::discardedCommandsCount() const {
@@ -133,7 +129,7 @@ void OBCConnection::onPayloadReceivedISR(const uint8_t* payload, uint8_t payload
   CommandPayload incomingPayload;
   memcpy(&incomingPayload, payload, sizeof(incomingPayload));
 
-  if (incomingPayload.flags == kCommandFrame) {
+  if (incomingPayload.flags == AOCSPacketConstants::kCommandPacket) {
     const bool hasLast = m_hasLastReceivedCommand;
     const bool isDuplicate =
         hasLast && (memcmp(&incomingPayload, &m_lastReceivedCommand, sizeof(CommandPayload)) == 0);
@@ -152,10 +148,10 @@ void OBCConnection::onPayloadReceivedISR(const uint8_t* payload, uint8_t payload
     m_commandWriteIndex = (writeIndex + 1U) % kCommandMailboxDepth;
     m_newCommandReady = true;
     ++m_commandCount;
-  } else if (incomingPayload.flags == kNoOpFrame) {
+  } else if (incomingPayload.flags == AOCSPacketConstants::kNoOpPacket) {
     ++m_noOpCount;
   } else {
-    ++m_malformedFrame;
+    ++m_malformedPacketCount;
   }
 }
 

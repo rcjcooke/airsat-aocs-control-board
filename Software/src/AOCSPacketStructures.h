@@ -4,13 +4,15 @@
 #include <Arduino.h>
 
 namespace AOCSPacketConstants {
-    constexpr uint8_t kSyncByte0 = 0xAA;
-    constexpr uint8_t kSyncByte1 = 0x55;
-    constexpr uint8_t kSyncSize = 2;
-    constexpr uint8_t kChecksumSize = 2;
-    constexpr uint8_t kCommandPayloadSize = 22;
-    constexpr uint8_t kTelemetryPayloadSize = 22;
-    constexpr uint8_t kFrameSize = kSyncSize + kCommandPayloadSize + kChecksumSize;
+    static constexpr uint8_t kSyncByte0 = 0xAA;
+    static constexpr uint8_t kSyncByte1 = 0x55;
+    static constexpr uint8_t kSyncSize = 2;
+    static constexpr uint8_t kChecksumSize = 2;
+    static constexpr uint8_t kCommandPayloadSize = 22;
+    static constexpr uint8_t kTelemetryPayloadSize = 22;
+    static constexpr uint8_t kPacketSize = kSyncSize + kCommandPayloadSize + kChecksumSize;
+    static constexpr uint8_t kCommandPacket = 0x11;
+    static constexpr uint8_t kNoOpPacket = 0x22;
 }
 
 #pragma pack(push, 1)

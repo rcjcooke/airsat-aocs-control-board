@@ -47,7 +47,6 @@ class SPIConnection {
   explicit SPIConnection(bool debugEnabled, uint8_t payloadSize = kDefaultPayloadSize);
 
   void begin();
-  void activate();
   void service();
   void setPayloadReadyHandler(PayloadReadyHandler handler);
   void setNextTxPayload(const uint8_t* payload, size_t payloadSize);

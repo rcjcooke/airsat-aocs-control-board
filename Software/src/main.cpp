@@ -5,10 +5,13 @@
 #include "OBCConnection.h"
 #include "ReactionWheel.h"
 
+// #include "MockOBCConnection.h"
+
 #define SPI_DEBUG false
 
 // The connection to the OBC (SPI)
 OBCConnection obcConnection = OBCConnection(SPI_DEBUG);
+// MockOBCConnection obcConnection = MockOBCConnection();
 
 // CAN bus settings: 1 Mbps arbitration and 5 Mbps data rate for CAN-FD bus speed
 ACAN_T4FD_Settings canSettings(1000000, DataBitRateFactor::x5);
@@ -85,7 +88,6 @@ void setup() {
   Serial.println("[main] Initialising OBC SPI Link...");
   obcConnection.updateTelemetry(currentTelemetry); // Must set telemetry before calling begin() so that the first frame is valid
   obcConnection.begin();
-  obcConnection.activateSPI();
 
   // Print out some debug if needed
   if (SPI_DEBUG) {
