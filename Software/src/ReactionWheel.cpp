@@ -69,7 +69,7 @@ ReactionWheel::RWStatus ReactionWheel::status() const {
   return m_status;
 }
 
-void ReactionWheel::update() {
+void ReactionWheel::service() {
 
   // Just in case
   if (m_moteus == nullptr) return; 
@@ -104,7 +104,7 @@ void ReactionWheel::update() {
       m_moteus->BeginPosition(cmd);
       
       if (kDebug) {
-        Serial.printf("[RW] [DEBUG] ReactionWheel::update() - Sent command: velocity = %.2f Hz, acceleration limit = %.2f Hz/s\r\n",
+        Serial.printf("[RW] [DEBUG] ReactionWheel::service() - Sent command: velocity = %.2f Hz, acceleration limit = %.2f Hz/s\r\n",
                       m_lastCommanded.targetVelocity,
                       m_lastCommanded.accelerationLimit);
       }

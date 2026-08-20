@@ -105,7 +105,7 @@ void updateSubSystems() {
   // Service the SPI connection to the OBC
   obcConnection.service();
   // Send commands / poll the reaction wheel controller
-  wheelController.update();
+  wheelController.service();
 }
 
 void executeInstructions() {

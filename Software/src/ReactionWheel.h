@@ -53,7 +53,7 @@ public:
   ReactionWheel(ACAN_T4& canHardware, const ACAN_T4FD_Settings& settings, uint8_t moteusID);
 
   void begin();
-  void update();
+  void service();
   void setTargetTorque(float requestedTorqueNm);
   RWStatus status() const;
 
