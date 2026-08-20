@@ -5,13 +5,16 @@
 #include "OBCConnection.h"
 #include "ReactionWheel.h"
 
-// #include "MockOBCConnection.h"
+#define AOCS_SPI_DEBUG false
+#define AOCS_ISOLATION_MODE false
 
-#define SPI_DEBUG false
-
-// The connection to the OBC (SPI)
-OBCConnection obcConnection = OBCConnection(SPI_DEBUG);
-// MockOBCConnection obcConnection = MockOBCConnection();
+#if AOCS_ISOLATION_MODE
+  #include "MockOBCConnection.h"
+  MockOBCConnection obcConnection = MockOBCConnection();
+#else
+  // The connection to the OBC (SPI)
+  OBCConnection obcConnection = OBCConnection(AOCS_SPI_DEBUG);
+#endif
 
 // CAN bus settings: 1 Mbps arbitration and 5 Mbps data rate for CAN-FD bus speed
 ACAN_T4FD_Settings canSettings(1000000, DataBitRateFactor::x5);
@@ -22,30 +25,31 @@ ReactionWheel wheelController(ACAN_T4::can3, canSettings, 1);
 AOCSControllerTelemetry currentTelemetry;
 
 // UTILITY METHODS
-
-String reactionWheelModeToString(ReactionWheel::RWMode mode) {
-  switch (mode) {
-    case ReactionWheel::RWMode::kStopped:
-      return "Stopped";
-    case ReactionWheel::RWMode::kRunning:
-      return "Running";
-    case ReactionWheel::RWMode::kFault:
-      return "Fault";
-    default:
-      return "Unknown";
+namespace AirSat {
+  String reactionWheelModeToString(ReactionWheel::RWMode mode) {
+    switch (mode) {
+      case ReactionWheel::RWMode::kStopped:
+        return "Stopped";
+      case ReactionWheel::RWMode::kRunning:
+        return "Running";
+      case ReactionWheel::RWMode::kFault:
+        return "Fault";
+      default:
+        return "Unknown";
+    }
   }
-}
 
-String reactionWheelFaultToString(ReactionWheel::RWFault fault) {
-  switch (fault) {
-    case ReactionWheel::RWFault::kNoFault:
-      return "No Fault";
-    case ReactionWheel::RWFault::kMoteusFault:
-      return "Moteus Fault";
-    case ReactionWheel::RWFault::kCommunicationError:
-      return "Communication Error";
-    default:
-      return "Unknown";
+  String reactionWheelFaultToString(ReactionWheel::RWFault fault) {
+    switch (fault) {
+      case ReactionWheel::RWFault::kNoFault:
+        return "No Fault";
+      case ReactionWheel::RWFault::kMoteusFault:
+        return "Moteus Fault";
+      case ReactionWheel::RWFault::kCommunicationError:
+        return "Communication Error";
+      default:
+        return "Unknown";
+    }
   }
 }
 
@@ -90,7 +94,7 @@ void setup() {
   obcConnection.begin();
 
   // Print out some debug if needed
-  if (SPI_DEBUG) {
+  if (AOCS_SPI_DEBUG) {
     obcConnection.spiConnection().spiRegisterAudit();
   }
   
@@ -147,10 +151,10 @@ void printDiagnostics() {
                   wheelController.getAngularMomentum(),
                   wheelController.getTargetTorque(),
                   wheelController.getTargetAngularAcceleration(),
-                  reactionWheelModeToString(wheelController.status().rwMode).c_str(),
-                  reactionWheelFaultToString(wheelController.status().rwFault).c_str());
+                  AirSat::reactionWheelModeToString(wheelController.status().rwMode).c_str(),
+                  AirSat::reactionWheelFaultToString(wheelController.status().rwFault).c_str());
 
-    if (SPI_DEBUG) {
+    if (AOCS_SPI_DEBUG) {
       obcConnection.spiConnection().printSRRegisterDetail();
       obcConnection.spiConnection().printFSRRegisterDetail();
       obcConnection.spiConnection().printRSRRegisterDetail();
