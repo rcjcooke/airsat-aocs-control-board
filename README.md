@@ -12,5 +12,6 @@ University of Surrey AirSat AOCS Control Board
 - All names (variable, function etc.) are defined in camel case
 - Class member variables are prefixed with `m_`
 - Class member constants are prefixed with `k`
+- Global variables are prefixed with `g_`
 - Methods called by interrupt service routines are suffixed with `ISR`
 - Class member variables are initialised in constructor initialisation strings.
