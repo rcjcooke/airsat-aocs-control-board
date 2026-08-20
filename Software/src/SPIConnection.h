@@ -1,5 +1,5 @@
-#ifndef SPI_CONNECTION_H
-#define SPI_CONNECTION_H
+#ifndef AIRSAT_SPI_CONNECTION_H
+#define AIRSAT_SPI_CONNECTION_H
 
 #include <Arduino.h>
 #include <atomic>
@@ -128,4 +128,4 @@ class SPIConnection {
   static SPIConnection* s_instance;
 };
 
-#endif
+#endif // AIRSAT_SPI_CONNECTION_H

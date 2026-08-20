@@ -1,4 +1,6 @@
-#pragma once
+#ifndef AIRSAT_REACTION_WHEEL_H
+#define AIRSAT_REACTION_WHEEL_H
+
 #include <Arduino.h>
 #include <MoteusTeensy.h>
 
@@ -86,3 +88,5 @@ private:
   uint32_t m_lastMessageTime;
 
 };
+
+#endif // AIRSAT_REACTION_WHEEL_H

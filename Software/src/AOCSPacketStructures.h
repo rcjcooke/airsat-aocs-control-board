@@ -1,5 +1,5 @@
-#ifndef AOCS_PACKET_STRUCTURES_H
-#define AOCS_PACKET_STRUCTURES_H
+#ifndef AIRSAT_AOCS_PACKET_STRUCTURES_H
+#define AIRSAT_AOCS_PACKET_STRUCTURES_H
 
 #include <Arduino.h>
 
@@ -43,4 +43,4 @@ struct TelemetryPacket {
 }; // 26 bytes
 #pragma pack(pop)
 
-#endif // AOCS_PACKET_STRUCTURES_H
+#endif // AIRSAT_AOCS_PACKET_STRUCTURES_H

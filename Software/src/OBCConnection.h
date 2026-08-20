@@ -1,6 +1,6 @@
 // TODO: Add a timeout on the OBC connection
-#ifndef OBC_CONNECTION_H
-#define OBC_CONNECTION_H
+#ifndef AIRSAT_OBC_CONNECTION_H
+#define AIRSAT_OBC_CONNECTION_H
 
 #include <Arduino.h>
 
@@ -55,4 +55,4 @@ class OBCConnection {
   bool m_hasLastReceivedCommand;
 };
 
-#endif
+#endif // AIRSAT_OBC_CONNECTION_H

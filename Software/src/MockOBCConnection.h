@@ -1,5 +1,5 @@
-#ifndef MOCK_OBC_CONNECTION_H
-#define MOCK_OBC_CONNECTION_H
+#ifndef AIRSAT_MOCK_OBC_CONNECTION_H
+#define AIRSAT_MOCK_OBC_CONNECTION_H
 
 #include <Arduino.h>
 
@@ -101,4 +101,4 @@ class MockOBCConnection {
 };
 
 
-#endif // MOCK_OBC_CONNECTION_H
+#endif // AIRSAT_MOCK_OBC_CONNECTION_H
