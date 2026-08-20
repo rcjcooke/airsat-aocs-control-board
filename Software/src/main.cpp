@@ -101,7 +101,7 @@ void setup() {
   }
 }
 
-void updateSubSystems() {
+void serviceSubSystems() {
   // Service the SPI connection to the OBC
   obcConnection.service();
   // Send commands / poll the reaction wheel controller
@@ -197,7 +197,7 @@ void printDiagnostics() {
 
 void loop() {
   // Process all updates across sub-systems
-  updateSubSystems();
+  serviceSubSystems();
 
   // Execute any new instructions from the OBC
   executeInstructions();
