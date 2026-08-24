@@ -6,12 +6,14 @@
 #include "ReactionWheel.h"
 #include "ThrusterControl.h"
 
-// Debug options
+// DEBUG OPTIONS
+
 #define AOCS_SPI_DEBUG false
 #define AOCS_ISOLATION_MODE false
 #define THRUSTER_CONTROL_DEBUG false
 
-// Pin assignments
+// PIN ASSIGNMENTS
+
 constexpr uint8_t CAN_SILENT_MODE_PIN = 21;
 // Thruster pin assignments -- per AOCS Hardware Control Board schematic
 // (TCTRL1-4 net labels): Thruster1=D1, Thruster2=D4, Thruster3=D29, Thruster4=D22
