@@ -4,11 +4,17 @@
 #include "AOCSControllerTelemetry.h"
 #include "OBCConnection.h"
 #include "ReactionWheel.h"
+#include "ThrusterControl.h"
 
+// Debug options
 #define AOCS_SPI_DEBUG false
 #define AOCS_ISOLATION_MODE false
 
-#define CAN_SILENT_MODE_PIN 21
+// Pin assignments
+constexpr uint8_t CAN_SILENT_MODE_PIN = 21;
+// Thruster pin assignments -- per AOCS Hardware Control Board schematic
+// (TCTRL1-4 net labels): Thruster1=D1, Thruster2=D4, Thruster3=D28, Thruster4=D22
+constexpr uint8_t THRUSTER_PINS[4] = {1, 4, 28, 22};
 
 #if AOCS_ISOLATION_MODE
   #include "MockOBCConnection.h"
@@ -79,7 +85,11 @@ void setup() {
 
   // Set up initial parameters
   currentTelemetry.wheelStoredAngularMomentumKGM2S = 0.0f;
-  currentTelemetry.thrustersPropellantRemainingKg = 1.0f;
+  currentTelemetry.thrustersPropellantRemainingKg = ThrusterControl::INITIAL_TANK_MASS_G / 1000.0f;
+    // Set up thruster PWM pins
+  for (uint8_t i = 0; i < 4; i++) {
+    ThrusterControl::setupPin(THRUSTER_PINS[i]);
+  }
 
   // Spin up CAN interface
   Serial.print("[main] Starting CAN interface...");
@@ -138,12 +148,34 @@ void executeInstructions() {
   if (obcConnection.hasNewCommand()) {
     CommandPayload workingCommand = obcConnection.takeLatestCommand();
     
+    // Drive the reaction wheel with the requested torque
     wheelController.setTargetTorque(workingCommand.torque);
     currentTelemetry.aocsTargetTorqueNM = wheelController.getTargetTorque();
-  }
+
+    // Drive thrusters and compute duty cycles actually applied
+    float duties[4];
+    for (uint8_t i = 0; i < 4; i++) {
+      duties[i] = ThrusterControl::driveThruster(
+          THRUSTER_PINS[i],
+          workingCommand.thrust[i],
+          ThrusterControl::TANK_PRESSURE_BAR_PLACEHOLDER
+      );
+    }
+
+    // Propellant usage tracking
+    static uint32_t lastPropellantUpdate = millis();
+    uint32_t now = millis();
+    float dtSeconds = (now - lastPropellantUpdate) / 1000.0f;
+    lastPropellantUpdate = now;
+    float propellantPct = ThrusterControl::updatePropellantUsage(duties, dtSeconds);
+    currentTelemetry.thrustersPropellantRemainingKg =
+        (propellantPct / 100.0f) * (ThrusterControl::INITIAL_TANK_MASS_G / 1000.0f);    
+    }
 }
 
 void refreshTelemetry() {
+
+
   // Reaction wheel stats
   currentTelemetry.wheelStoredAngularMomentumKGM2S = wheelController.getAngularMomentum();
   currentTelemetry.wheelMode = static_cast<uint8_t>(wheelController.status().rwMode);
