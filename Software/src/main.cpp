@@ -9,12 +9,13 @@
 // Debug options
 #define AOCS_SPI_DEBUG false
 #define AOCS_ISOLATION_MODE false
+#define THRUSTER_CONTROL_DEBUG false
 
 // Pin assignments
 constexpr uint8_t CAN_SILENT_MODE_PIN = 21;
 // Thruster pin assignments -- per AOCS Hardware Control Board schematic
 // (TCTRL1-4 net labels): Thruster1=D1, Thruster2=D4, Thruster3=D28, Thruster4=D22
-constexpr uint8_t THRUSTER_PINS[4] = {1, 4, 28, 22};
+constexpr uint8_t THRUSTER_PINS[ThrusterControl::kThrusterCount] = {1, 4, 28, 22};
 
 #if AOCS_ISOLATION_MODE
   #include "MockOBCConnection.h"
@@ -28,6 +29,7 @@ constexpr uint8_t THRUSTER_PINS[4] = {1, 4, 28, 22};
 ACAN_T4FD_Settings canSettings(1000000, DataBitRateFactor::x5);
 // The reaction wheel controller
 ReactionWheel wheelController(CAN_SILENT_MODE_PIN, ACAN_T4::can3, canSettings, 1);
+ThrusterControl thrusterController(THRUSTER_PINS);
 
 // Current system telemetry
 AOCSControllerTelemetry currentTelemetry;
@@ -84,12 +86,8 @@ void setup() {
   }
 
   // Set up initial parameters
-  currentTelemetry.wheelStoredAngularMomentumKGM2S = 0.0f;
-  currentTelemetry.thrustersPropellantRemainingKg = ThrusterControl::INITIAL_TANK_MASS_G / 1000.0f;
-    // Set up thruster PWM pins
-  for (uint8_t i = 0; i < 4; i++) {
-    ThrusterControl::setupPin(THRUSTER_PINS[i]);
-  }
+  currentTelemetry.wheelStoredAngularMomentumKGM2S = wheelController.getAngularMomentum();
+  currentTelemetry.thrustersPropellantRemainingKg = thrusterController.remainingPropellantKg();
 
   // Spin up CAN interface
   Serial.print("[main] Starting CAN interface...");
@@ -119,6 +117,11 @@ void setup() {
   if (AOCS_SPI_DEBUG) {
     obcConnection.spiConnection().spiRegisterAudit();
   }
+
+  // Spin up thruster control
+  Serial.print("[main] Initialising Thruster Control...");
+  thrusterController.begin();
+  Serial.println("OK");
   
   // Spin up the reaction wheel controller
   // NOTE: This happens last in setup() intentionally because we need CAN messages to be sent
@@ -152,29 +155,19 @@ void executeInstructions() {
     wheelController.setTargetTorque(workingCommand.torque);
     currentTelemetry.aocsTargetTorqueNM = wheelController.getTargetTorque();
 
-    // Drive thrusters and compute duty cycles actually applied
-    float duties[4];
-    for (uint8_t i = 0; i < 4; i++) {
-      duties[i] = ThrusterControl::driveThruster(
-          THRUSTER_PINS[i],
-          workingCommand.thrust[i],
-          ThrusterControl::TANK_PRESSURE_BAR_PLACEHOLDER
-      );
-    }
-
-    // Propellant usage tracking
-    static uint32_t lastPropellantUpdate = millis();
-    uint32_t now = millis();
-    float dtSeconds = (now - lastPropellantUpdate) / 1000.0f;
-    lastPropellantUpdate = now;
-    float propellantPct = ThrusterControl::updatePropellantUsage(duties, dtSeconds);
-    currentTelemetry.thrustersPropellantRemainingKg =
-        (propellantPct / 100.0f) * (ThrusterControl::INITIAL_TANK_MASS_G / 1000.0f);    
-    }
+    thrusterController.setThrustN(workingCommand.thrust);
+    currentTelemetry.thrustersPropellantRemainingKg = thrusterController.remainingPropellantKg();
+  }
 }
 
 void refreshTelemetry() {
 
+  // Thruster stats
+  currentTelemetry.thrusters1ThrustN = thrusterController.getThrust0();
+  currentTelemetry.thrusters2ThrustN = thrusterController.getThrust1();
+  currentTelemetry.thrusters3ThrustN = thrusterController.getThrust2();
+  currentTelemetry.thrusters4ThrustN = thrusterController.getThrust3();
+  currentTelemetry.thrustersPropellantRemainingKg = thrusterController.remainingPropellantKg();
 
   // Reaction wheel stats
   currentTelemetry.wheelStoredAngularMomentumKGM2S = wheelController.getAngularMomentum();
@@ -191,6 +184,7 @@ void refreshTelemetry() {
 
   // Update OBC link with telemetry ready for next data transfer
   obcConnection.updateTelemetry(currentTelemetry);
+
 }
 
 void printDiagnostics() {
@@ -210,7 +204,21 @@ void printDiagnostics() {
     Serial.printf("[main] [RW ] Moteus mode: %u | Moteus fault code: %u\r\n",
                   wheelController.status().motorControllerMode,
                   wheelController.status().motorControllerFaultCode);
+    Serial.printf("[main] [THR] Thrust1: %.3f N | Thrust2: %.3f N | Thrust3: %.3f N | Thrust4: %.3f N | Propellant remaining: %.2f kg\r\n",
+                  thrusterController.getThrust0(),
+                  thrusterController.getThrust1(),
+                  thrusterController.getThrust2(),
+                  thrusterController.getThrust3(),
+                  thrusterController.remainingPropellantKg());
 
+    if (THRUSTER_CONTROL_DEBUG) {
+      Serial.printf("[main] [THR] Duty1: %.2f%% | Duty2: %.2f%% | Duty3: %.2f%% | Duty4: %.2f%%\r\n",
+                    thrusterController.getDutyCycle0() * 100.0f,
+                    thrusterController.getDutyCycle1() * 100.0f,
+                    thrusterController.getDutyCycle2() * 100.0f,
+                    thrusterController.getDutyCycle3() * 100.0f);
+    }
+    
     if (AOCS_SPI_DEBUG) {
       obcConnection.spiConnection().printSRRegisterDetail();
       obcConnection.spiConnection().printFSRRegisterDetail();
