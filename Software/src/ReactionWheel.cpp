@@ -39,6 +39,16 @@ void ReactionWheel::begin() {
     m_status.rwMode = RWMode::kFault;
     m_status.rwFault = RWFault::kCommunicationError;
   }
+
+  // Send an initial 0 velocity command to kick off the baseline trajectory tracking
+  Moteus::PositionMode::Command init_cmd;
+  init_cmd.position = std::numeric_limits<double>::quiet_NaN(); // Locks to current encoder position
+  init_cmd.velocity = 0.0;  // Stay still
+  init_cmd.kp_scale = 1.0;  // Leave default gains active to settle the loop
+  init_cmd.kd_scale = 1.0;
+  m_moteus->SetPosition(init_cmd);
+
+  delay(50); // Give the moteus firmware 50ms to configure its internal trajectory anchor
 }
 
 void ReactionWheel::setTargetTorque(float requestedTorqueNm) {
@@ -85,7 +95,6 @@ void ReactionWheel::service() {
   if (m_moteus == nullptr) return; 
 
   static uint32_t sendTimer = 0;
-  static uint32_t pollTimer = 0;
   
   // Only send a new command if it has been long enough since the last command (unless we're not managing that)
   if (m_noControlTimeManagement || millis() - sendTimer >= Constants::CONTROL_PERIOD_MS) { 
@@ -98,49 +107,50 @@ void ReactionWheel::service() {
     // Use the Moteus acceleration limit for AirSat torque control
     // Make sure physical constraints are imposed in case they haven't already been applied
     Moteus::PositionMode::Command cmd;
-    cmd.position = std::numeric_limits<double>::quiet_NaN();
+    cmd.position = std::numeric_limits<float>::quiet_NaN();
     cmd.velocity = m_lastCommanded.targetVelocity;
     cmd.velocity_limit = Constants::MAX_MOTOR_SPEED_HZ; 
     cmd.accel_limit = constrain(m_lastCommanded.accelerationLimit, 0, Constants::MAX_MOTOR_ACCELERATION_HZ);
     cmd.maximum_torque = Constants::MAX_MOTOR_TORQUE_NM;
+    cmd.kp_scale = 1.0;
+    cmd.kd_scale = 1.0;
 
     // Using Begin rather than Set to avoid blocking calls.
-    m_moteus->BeginPosition(cmd);
+    m_moteus->BeginPosition(cmd, &kPositionFormat);
       
-    auto isEqualWithinTolerance = [](float a, float b, float tolerance) {
-      return fabs(a - b) <= tolerance;
-    };
+    if (kDebug) {
+      auto isEqualWithinTolerance = [](float a, float b, float tolerance) {
+        return fabs(a - b) <= tolerance;
+      };
 
-    // Check to see whether the latest target is different within the controllers precision
-    if (!isEqualWithinTolerance(m_target.targetVelocity, m_lastCommanded.targetVelocity, Constants::VELOCITY_TOLERANCE_MSS) || 
-        !isEqualWithinTolerance(m_target.accelerationLimit, m_lastCommanded.accelerationLimit, Constants::ACCELERATION_TOLERANCE_MSS)) {
-
-      if (kDebug) {
+      if (!isEqualWithinTolerance(m_target.targetVelocity, m_lastCommanded.targetVelocity, Constants::VELOCITY_TOLERANCE_MSS) || 
+          !isEqualWithinTolerance(m_target.accelerationLimit, m_lastCommanded.accelerationLimit, Constants::ACCELERATION_TOLERANCE_MSS)) {
+        // Check to see whether the latest target is different within the controllers precision
         Serial.printf("[RW] [DEBUG] ReactionWheel::service() - Sent new command: velocity = %.2f Hz, acceleration limit = %.2f Hz/s\r\n",
                       m_lastCommanded.targetVelocity,
                       m_lastCommanded.accelerationLimit);
       }
-
+      // Once a second, print the last command
+      static uint32_t lastDebugTime = 0;
+      if (millis() - lastDebugTime >= 1000) {
+        lastDebugTime = millis();
+        Serial.printf("[RW] [DEBUG] ReactionWheel::service() - Last command: velocity = %.2f Hz, acceleration limit = %.2f Hz/s\r\n",
+                      m_lastCommanded.targetVelocity,
+                      m_lastCommanded.accelerationLimit);
+      }
     }
-  }
 
-  // Get the latest status from the motor controller, but only if it has been long enough since the last poll
-  if (millis() - pollTimer >= Constants::UPDATE_PERIOD_MS) { 
-    pollTimer = millis();
-
-    // Get the current motor status
-    // if (kDebug) {
-    //   Serial.printf("[RW] [DEBUG] ReactionWheel::service() - Polling for status: CAN bus available flag: %s\r\n",
-    //                 m_canHardwareRef.available() ? "True" : "False");
-    // }
+    // Poll for the result of the last command and update the status
     if (m_moteus->Poll()) {
       m_lastMessageTime = millis();
       const Moteus::Query::Result v = m_moteus->last_result().values;
       parseMoteusStatus(m_status, v);
-    } else {
-      m_status.rwMode = RWMode::kFault;
-      m_status.rwFault = RWFault::kCommunicationError;
     }
+    
+    // else {
+    //   m_status.rwMode = RWMode::kFault;
+    //   m_status.rwFault = RWFault::kCommunicationError;
+    // }
   }
 
   // Backup hardware timing link dropout watchdog

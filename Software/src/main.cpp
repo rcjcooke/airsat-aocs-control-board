@@ -103,7 +103,7 @@ void setup() {
   if (wheelController.status().rwMode != ReactionWheel::RWMode::kRunning) {
     Serial.println("[main] [WARN] Reaction Wheel offline at startup validation check.");
   }
-  
+
   Serial.println("[main] AOCS Control Startup Complete.");
   
 }
@@ -150,12 +150,13 @@ void printDiagnostics() {
                   obcConnection.noOpCount(),
                   obcConnection.rxErrorCount(), 
                   obcConnection.syncDropCount());
-    Serial.printf("[main] [RW ] Stored Momentum: %.3f Kg.m²/s | Target Torque: %.3f Nm | Target Acceleration: %.3f rad/s² | Mode: %s | Fault: %s\r\n",
+    Serial.printf("[main] [RW ] Stored Momentum: %.3f Kg.m²/s | Target Torque: %.3f Nm | Target Acceleration: %.3f rad/s² | Mode: %s | Fault: %s | Moteus fault code: %u\r\n",
                   wheelController.getAngularMomentum(),
                   wheelController.getTargetTorque(),
                   wheelController.getTargetAngularAcceleration(),
                   AirSat::reactionWheelModeToString(wheelController.status().rwMode).c_str(),
-                  AirSat::reactionWheelFaultToString(wheelController.status().rwFault).c_str());
+                  AirSat::reactionWheelFaultToString(wheelController.status().rwFault).c_str(),
+                  wheelController.status().motorControllerFaultCode);
 
     if (AOCS_SPI_DEBUG) {
       obcConnection.spiConnection().printSRRegisterDetail();

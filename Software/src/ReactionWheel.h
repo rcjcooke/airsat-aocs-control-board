@@ -17,11 +17,10 @@ namespace Constants {
   constexpr float FLYWHEEL_INERTIA = 0.000215f; // I (kg*m^2)
   constexpr float WHEEL_INERTIA = STATOR_INERTIA + FLYWHEEL_INERTIA; // I (kg*m^2)
   constexpr float MAX_MOTOR_TORQUE_NM = 1.7f; // Maximum torque (Nm)
-  constexpr float MAX_MOTOR_SPEED_HZ = 125.0f; // 7500 RPM
+  constexpr float MAX_MOTOR_SPEED_HZ = 83.0f; // 4980 RPM (Measured limit - losses because of 22.2V supply, 330Kv motor, FOC control and electrical losses)
   constexpr float MAX_MOTOR_ACCELERATION_HZ = MAX_MOTOR_TORQUE_NM / WHEEL_INERTIA * RAD_S_TO_HZ; // Maximum acceleration (Hz/s)
   // Control constants
   constexpr uint32_t CONTROL_PERIOD_MS = 20;
-  constexpr uint32_t UPDATE_PERIOD_MS = 10;
   constexpr uint32_t TIMEOUT_MS = 500;
   // Teensy 32-bit floats provide about 7 digits of precision
   constexpr float ACCELERATION_TOLERANCE_MSS = 0.000001f; // Tolerance for acceleration comparison
@@ -73,6 +72,18 @@ private:
     float targetVelocity;
     float accelerationLimit;
   };
+
+  inline static const Moteus::PositionMode::Format kPositionFormat = [] {
+    Moteus::PositionMode::Format format;
+    format.position = mjbots::moteus::Resolution::kFloat;
+    format.velocity = mjbots::moteus::Resolution::kFloat;
+    format.kp_scale = mjbots::moteus::Resolution::kFloat;
+    format.kd_scale = mjbots::moteus::Resolution::kFloat;
+    format.maximum_torque = mjbots::moteus::Resolution::kFloat;
+    format.velocity_limit = mjbots::moteus::Resolution::kFloat;
+    format.accel_limit = mjbots::moteus::Resolution::kFloat;
+    return format;
+  }();
 
   void parseMoteusStatus(ReactionWheel::RWStatus& status, const Moteus::Query::Result& v);
 
