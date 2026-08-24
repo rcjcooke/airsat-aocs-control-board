@@ -38,16 +38,22 @@ void ReactionWheel::begin() {
     // Got no reply from the Moteus controller, so set the fault state
     m_status.rwMode = RWMode::kFault;
     m_status.rwFault = RWFault::kCommunicationError;
+    return; // No point continuing if we can't talk to the controller
   }
 
   // Send an initial 0 velocity command to kick off the baseline trajectory tracking
   Moteus::PositionMode::Command init_cmd;
-  init_cmd.position = std::numeric_limits<double>::quiet_NaN(); // Locks to current encoder position
-  init_cmd.velocity = 0.0;  // Stay still
-  init_cmd.kp_scale = 1.0;  // Leave default gains active to settle the loop
+  init_cmd.position = std::numeric_limits<float>::quiet_NaN();
+  init_cmd.velocity = 0.0;
+  init_cmd.kp_scale = 1.0;
   init_cmd.kd_scale = 1.0;
-  m_moteus->SetPosition(init_cmd);
-
+  bool initSuccess = m_moteus->SetPosition(init_cmd, &kPositionFormat);
+  if (!initSuccess) {
+    // If the formatted frame failed, your service loop will fail too. Flag it here.
+    m_status.rwMode = RWMode::kFault;
+    m_status.rwFault = RWFault::kCommunicationError;
+    if (kDebug) Serial.println("[RW] [ERROR] Formatted initialisation frame rejected!");
+  }
   delay(50); // Give the moteus firmware 50ms to configure its internal trajectory anchor
 }
 
@@ -62,10 +68,12 @@ void ReactionWheel::setTargetTorque(float requestedTorqueNm) {
   m_target.accelerationLimit = abs(targetAlphaRadSS * Constants::RAD_S_TO_HZ);
   m_target.targetVelocity = constrain(rawTargetVelocityHz, -Constants::MAX_MOTOR_SPEED_HZ, Constants::MAX_MOTOR_SPEED_HZ);
   if (kDebug) {
-    Serial.printf("[RW] [DEBUG] ReactionWheel::setTargetTorque() - Requested torque: %.4f Nm, target velocity: %.2f Hz, acceleration limit: %.2f Hz/s\r\n",
-                  requestedTorqueNm,
-                  m_target.targetVelocity,
-                  m_target.accelerationLimit);
+    if (Serial.availableForWrite() > 0) {
+      Serial.printf("[RW] [DEBUG] ReactionWheel::setTargetTorque() - Requested torque: %.4f Nm, target velocity: %.2f Hz, acceleration limit: %.2f Hz/s\r\n",
+                    requestedTorqueNm,
+                    m_target.targetVelocity,
+                    m_target.accelerationLimit);
+    }
   }
 }
 
@@ -123,20 +131,22 @@ void ReactionWheel::service() {
         return fabs(a - b) <= tolerance;
       };
 
-      if (!isEqualWithinTolerance(m_target.targetVelocity, m_lastCommanded.targetVelocity, Constants::VELOCITY_TOLERANCE_MSS) || 
+      if (Serial.availableForWrite() > 0) {
+        if (!isEqualWithinTolerance(m_target.targetVelocity, m_lastCommanded.targetVelocity, Constants::VELOCITY_TOLERANCE_MSS) || 
           !isEqualWithinTolerance(m_target.accelerationLimit, m_lastCommanded.accelerationLimit, Constants::ACCELERATION_TOLERANCE_MSS)) {
-        // Check to see whether the latest target is different within the controllers precision
-        Serial.printf("[RW] [DEBUG] ReactionWheel::service() - Sent new command: velocity = %.2f Hz, acceleration limit = %.2f Hz/s\r\n",
-                      m_lastCommanded.targetVelocity,
-                      m_lastCommanded.accelerationLimit);
-      }
-      // Once a second, print the last command
-      static uint32_t lastDebugTime = 0;
-      if (millis() - lastDebugTime >= 1000) {
-        lastDebugTime = millis();
-        Serial.printf("[RW] [DEBUG] ReactionWheel::service() - Last command: velocity = %.2f Hz, acceleration limit = %.2f Hz/s\r\n",
-                      m_lastCommanded.targetVelocity,
-                      m_lastCommanded.accelerationLimit);
+          // Check to see whether the latest target is different within the controllers precision
+          Serial.printf("[RW] [DEBUG] ReactionWheel::service() - Sent new command: velocity = %.2f Hz, acceleration limit = %.2f Hz/s\r\n",
+                        m_lastCommanded.targetVelocity,
+                        m_lastCommanded.accelerationLimit);
+        }
+        // Once a second, print the last command
+        static uint32_t lastDebugTime = 0;
+        if (millis() - lastDebugTime >= 1000) {
+          lastDebugTime = millis();
+          Serial.printf("[RW] [DEBUG] ReactionWheel::service() - Last command: velocity = %.2f Hz, acceleration limit = %.2f Hz/s\r\n",
+                        m_lastCommanded.targetVelocity,
+                        m_lastCommanded.accelerationLimit);
+        }
       }
     }
 
@@ -165,12 +175,19 @@ void ReactionWheel::parseMoteusStatus(RWStatus& status, const Moteus::Query::Res
   status.angularMomentumKGM2S = Constants::WHEEL_INERTIA * v.velocity * Constants::HZ_TO_RAD_S;
   status.motorControllerMode = static_cast<uint8_t>(v.mode);
   status.motorControllerFaultCode = v.fault;
-  if (v.mode == mjbots::moteus::Mode::kFault) {
-    status.rwMode = RWMode::kFault;
-    status.rwFault = RWFault::kMoteusFault;
-  } else {
-    status.rwMode = RWMode::kRunning;
-    status.rwFault = RWFault::kNoFault;
+  switch (v.mode) {
+    case mjbots::moteus::Mode::kFault:
+      status.rwMode = RWMode::kFault;
+      status.rwFault = RWFault::kMoteusFault;
+      break;
+    case mjbots::moteus::Mode::kPositionTimeout:
+      status.rwMode = RWMode::kFault;
+      status.rwFault = RWFault::kCANTimeout;
+      break;
+    default:
+      status.rwMode = RWMode::kRunning;
+      status.rwFault = RWFault::kNoFault;
+      break;
   }
 }
 

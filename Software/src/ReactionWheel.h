@@ -41,7 +41,8 @@ public:
   enum class RWFault : uint8_t {
     kNoFault = 0,
     kMoteusFault = 1,
-    kCommunicationError = 2
+    kCommunicationError = 2,
+    kCANTimeout = 3 // Timeout on the moteus controller waiting for the next CAN command
   };
 
   struct RWStatus {

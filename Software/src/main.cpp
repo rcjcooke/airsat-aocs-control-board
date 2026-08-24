@@ -49,6 +49,8 @@ namespace AirSat {
         return "Moteus Fault";
       case ReactionWheel::RWFault::kCommunicationError:
         return "Communication Error";
+      case ReactionWheel::RWFault::kCANTimeout:
+        return "Moteus CAN Timeout";
       default:
         return "Unknown";
     }
@@ -80,30 +82,46 @@ void setup() {
   currentTelemetry.thrustersPropellantRemainingKg = 1.0f;
 
   // Spin up CAN interface
+  Serial.print("[main] Starting CAN interface...");
   const uint32_t errorCode = ACAN_T4::can3.beginFD(canSettings);
   while (errorCode != 0) {
     Serial.printf("[main] [ERROR] CAN3 startup error 0x%X. Trying again in 1 second.\r\n", errorCode);
     delay(1000);
   }
-
-  // Spin up the reaction wheel controller (CAN)
-  Serial.println("[main] Initialising Reaction Wheel Controller...");
-  wheelController.begin();
+  Serial.println("OK");
 
   // Spin up the OBC Link (SPI)
-  Serial.println("[main] Initialising OBC SPI Link...");
+  Serial.print("[main] Initialising OBC SPI Link...");
   obcConnection.updateTelemetry(currentTelemetry); // Must set telemetry before calling begin() so that the first frame is valid
   obcConnection.begin();
+  timeout = millis();
+  while (!obcConnection.isConnected() && (millis() - timeout < 20000)) {
+    Serial.print(".");
+    delay(1000);
+  }
+  if (!obcConnection.isConnected()) {
+    Serial.println("FAIL. Will keep trying in background. Check OBC is powered and connected.");
+  } else {
+    Serial.println("OK");
+  }
 
   // Print out some debug if needed
   if (AOCS_SPI_DEBUG) {
     obcConnection.spiConnection().spiRegisterAudit();
   }
   
+  // Spin up the reaction wheel controller
+  // NOTE: This happens last in setup() intentionally because we need CAN messages to be sent
+  // continuously after it's started or the motor controller will timeout.
+  Serial.print("[main] Initialising Reaction Wheel Controller...");
+  wheelController.begin();
   if (wheelController.status().rwMode != ReactionWheel::RWMode::kRunning) {
-    Serial.println("[main] [WARN] Reaction Wheel offline at startup validation check.");
+    Serial.println("FAIL. Fault: " + AirSat::reactionWheelFaultToString(wheelController.status().rwFault) + 
+                   " | Moteus fault code: " + String(wheelController.status().motorControllerFaultCode));
+  } else {
+    Serial.println("OK");
   }
-
+  
   Serial.println("[main] AOCS Control Startup Complete.");
   
 }
@@ -144,18 +162,21 @@ void refreshTelemetry() {
 }
 
 void printDiagnostics() {
+  if (Serial.availableForWrite() > 0) {
     Serial.printf("[main] [OBC] Link state: %s | Commands RX: %u | No-Ops RX: %u | RX errors: %u | Sync drops: %u\r\n",
                   obcConnection.isConnected() ? "Connected" : "DISCONNECTED",
                   obcConnection.commandCount(),
                   obcConnection.noOpCount(),
                   obcConnection.rxErrorCount(), 
                   obcConnection.syncDropCount());
-    Serial.printf("[main] [RW ] Stored Momentum: %.3f Kg.m²/s | Target Torque: %.3f Nm | Target Acceleration: %.3f rad/s² | Mode: %s | Fault: %s | Moteus fault code: %u\r\n",
+    Serial.printf("[main] [RW ] Stored Momentum: %.3f Kg.m²/s | Target Torque: %.3f Nm | Target Acceleration: %.3f rad/s² | Mode: %s | Fault: %s\r\n",
                   wheelController.getAngularMomentum(),
                   wheelController.getTargetTorque(),
                   wheelController.getTargetAngularAcceleration(),
                   AirSat::reactionWheelModeToString(wheelController.status().rwMode).c_str(),
-                  AirSat::reactionWheelFaultToString(wheelController.status().rwFault).c_str(),
+                  AirSat::reactionWheelFaultToString(wheelController.status().rwFault).c_str());
+    Serial.printf("[main] [RW ] Moteus mode: %u | Moteus fault code: %u\r\n",
+                  wheelController.status().motorControllerMode,
                   wheelController.status().motorControllerFaultCode);
 
     if (AOCS_SPI_DEBUG) {
@@ -201,6 +222,7 @@ void printDiagnostics() {
       }
       Serial.println();
     }
+  }
 }
 
 void loop() {
