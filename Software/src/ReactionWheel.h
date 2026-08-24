@@ -9,18 +9,24 @@ class ACAN_T4;
 class ACAN_T4FD_Settings;
 
 namespace Constants {
-    constexpr float WHEEL_INERTIA = 0.0025f; // I (kg*m^2)
-    constexpr float RAD_S_TO_HZ = 1.0f / (2.0f * PI);
-    constexpr float HZ_TO_RAD_S = 2.0f * PI;
-    constexpr float MAX_SPEED_HZ = 80.0f;
-    constexpr float MAX_SPEED_CAP_HZ = 85.0f;
-    constexpr uint32_t CONTROL_PERIOD_MS = 20;
-    constexpr uint32_t UPDATE_PERIOD_MS = 10;
-    constexpr uint32_t TIMEOUT_MS = 500;
-    // Teensy 32-bit floats provide about 7 digits of precision
-    constexpr float ACCELERATION_TOLERANCE_MSS = 0.000001f; // Tolerance for acceleration comparison
-    constexpr float VELOCITY_TOLERANCE_MSS = 0.000001f; // Tolerance for velocity comparison
-}
+  // Conversion factors
+  constexpr float RAD_S_TO_HZ = 1.0f / (2.0f * PI);
+  constexpr float HZ_TO_RAD_S = 2.0f * PI;
+  // Physical constants and limits
+  constexpr float STATOR_INERTIA = 6.7464E-06f; // I (kg*m^2)
+  constexpr float FLYWHEEL_INERTIA = 0.000215f; // I (kg*m^2)
+  constexpr float WHEEL_INERTIA = STATOR_INERTIA + FLYWHEEL_INERTIA; // I (kg*m^2)
+  constexpr float MAX_MOTOR_TORQUE_NM = 1.7f; // Maximum torque (Nm)
+  constexpr float MAX_MOTOR_SPEED_HZ = 125.0f; // 7500 RPM
+  constexpr float MAX_MOTOR_ACCELERATION_HZ = MAX_MOTOR_TORQUE_NM / WHEEL_INERTIA * RAD_S_TO_HZ; // Maximum acceleration (Hz/s)
+  // Control constants
+  constexpr uint32_t CONTROL_PERIOD_MS = 20;
+  constexpr uint32_t UPDATE_PERIOD_MS = 10;
+  constexpr uint32_t TIMEOUT_MS = 500;
+  // Teensy 32-bit floats provide about 7 digits of precision
+  constexpr float ACCELERATION_TOLERANCE_MSS = 0.000001f; // Tolerance for acceleration comparison
+  constexpr float VELOCITY_TOLERANCE_MSS = 0.000001f; // Tolerance for velocity comparison
+} // namespace Constants
 
 class ReactionWheel {
 public:
@@ -50,7 +56,7 @@ public:
     uint8_t motorControllerFaultCode = 0;
   };
 
-  ReactionWheel(ACAN_T4& canHardware, const ACAN_T4FD_Settings& settings, uint8_t moteusID);
+  ReactionWheel(uint8_t silentModePin, ACAN_T4& canHardware, const ACAN_T4FD_Settings& settings, uint8_t moteusID);
 
   void begin();
   void service();
@@ -71,6 +77,7 @@ private:
   void parseMoteusStatus(ReactionWheel::RWStatus& status, const Moteus::Query::Result& v);
 
   // Underlying hardware
+  uint8_t m_silentModePin;
   MoteusTeensyCanFD* m_canBus;
   Moteus* m_moteus;
   ACAN_T4& m_canHardwareRef;

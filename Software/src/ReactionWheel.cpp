@@ -1,8 +1,9 @@
 #include "ReactionWheel.h"
 #include <ACAN_T4.h>
 
-ReactionWheel::ReactionWheel(ACAN_T4& canHardware, const ACAN_T4FD_Settings& settings, uint8_t moteusID)
-  : m_canBus(nullptr), 
+ReactionWheel::ReactionWheel(uint8_t silentModePin, ACAN_T4& canHardware, const ACAN_T4FD_Settings& settings, uint8_t moteusID)
+  : m_silentModePin(silentModePin),
+    m_canBus(nullptr), 
     m_moteus(nullptr),
     m_canHardwareRef(canHardware),
     m_canSettingsRef(settings),
@@ -10,11 +11,15 @@ ReactionWheel::ReactionWheel(ACAN_T4& canHardware, const ACAN_T4FD_Settings& set
     m_target(), 
     m_lastCommanded(), 
     m_targetTorqueNm(0.0f),
-    m_noControlTimeManagement(true), 
+    m_noControlTimeManagement(false), 
     m_status(), 
     m_lastMessageTime(0) {}
 
 void ReactionWheel::begin() {
+  // Make sure we're not in silent (listen-only) mode on the CAN transceiver
+  pinMode(m_silentModePin, OUTPUT);
+  digitalWrite(m_silentModePin, LOW);
+
   // Construct the CAN interface
   m_canBus = new MoteusTeensyCanFD(m_canHardwareRef, m_canSettingsRef);
 
@@ -41,12 +46,17 @@ void ReactionWheel::setTargetTorque(float requestedTorqueNm) {
 
   float targetAlphaRadSS = requestedTorqueNm / Constants::WHEEL_INERTIA;
   float rawTargetVelocityHz = (requestedTorqueNm >= 0.0f) 
-                              ? Constants::MAX_SPEED_HZ 
-                              : -Constants::MAX_SPEED_HZ;
+                              ? Constants::MAX_MOTOR_SPEED_HZ 
+                              : -Constants::MAX_MOTOR_SPEED_HZ;
                               
   m_target.accelerationLimit = abs(targetAlphaRadSS * Constants::RAD_S_TO_HZ);
-  m_target.targetVelocity = constrain(rawTargetVelocityHz, -Constants::MAX_SPEED_HZ, Constants::MAX_SPEED_HZ);
-
+  m_target.targetVelocity = constrain(rawTargetVelocityHz, -Constants::MAX_MOTOR_SPEED_HZ, Constants::MAX_MOTOR_SPEED_HZ);
+  if (kDebug) {
+    Serial.printf("[RW] [DEBUG] ReactionWheel::setTargetTorque() - Requested torque: %.4f Nm, target velocity: %.2f Hz, acceleration limit: %.2f Hz/s\r\n",
+                  requestedTorqueNm,
+                  m_target.targetVelocity,
+                  m_target.accelerationLimit);
+  }
 }
 
 float ReactionWheel::getAngularVelocity() const { 
@@ -81,6 +91,22 @@ void ReactionWheel::service() {
   if (m_noControlTimeManagement || millis() - sendTimer >= Constants::CONTROL_PERIOD_MS) { 
     sendTimer = millis();
 
+    // Update the last commanded values
+    m_lastCommanded.targetVelocity = m_target.targetVelocity;
+    m_lastCommanded.accelerationLimit = m_target.accelerationLimit;
+
+    // Use the Moteus acceleration limit for AirSat torque control
+    // Make sure physical constraints are imposed in case they haven't already been applied
+    Moteus::PositionMode::Command cmd;
+    cmd.position = std::numeric_limits<double>::quiet_NaN();
+    cmd.velocity = m_lastCommanded.targetVelocity;
+    cmd.velocity_limit = Constants::MAX_MOTOR_SPEED_HZ; 
+    cmd.accel_limit = constrain(m_lastCommanded.accelerationLimit, 0, Constants::MAX_MOTOR_ACCELERATION_HZ);
+    cmd.maximum_torque = Constants::MAX_MOTOR_TORQUE_NM;
+
+    // Using Begin rather than Set to avoid blocking calls.
+    m_moteus->BeginPosition(cmd);
+      
     auto isEqualWithinTolerance = [](float a, float b, float tolerance) {
       return fabs(a - b) <= tolerance;
     };
@@ -89,22 +115,8 @@ void ReactionWheel::service() {
     if (!isEqualWithinTolerance(m_target.targetVelocity, m_lastCommanded.targetVelocity, Constants::VELOCITY_TOLERANCE_MSS) || 
         !isEqualWithinTolerance(m_target.accelerationLimit, m_lastCommanded.accelerationLimit, Constants::ACCELERATION_TOLERANCE_MSS)) {
 
-      // Update the last commanded values
-      m_lastCommanded.targetVelocity = m_target.targetVelocity;
-      m_lastCommanded.accelerationLimit = m_target.accelerationLimit;
-      
-      // Use the Moteus acceleration limit for AirSat torque control
-      Moteus::PositionMode::Command cmd;
-      cmd.position = std::numeric_limits<double>::quiet_NaN();
-      cmd.velocity = m_lastCommanded.targetVelocity;
-      cmd.velocity_limit = Constants::MAX_SPEED_CAP_HZ; 
-      cmd.accel_limit = m_lastCommanded.accelerationLimit;
-
-      // Using Begin rather than Set to avoid blocking calls.
-      m_moteus->BeginPosition(cmd);
-      
       if (kDebug) {
-        Serial.printf("[RW] [DEBUG] ReactionWheel::service() - Sent command: velocity = %.2f Hz, acceleration limit = %.2f Hz/s\r\n",
+        Serial.printf("[RW] [DEBUG] ReactionWheel::service() - Sent new command: velocity = %.2f Hz, acceleration limit = %.2f Hz/s\r\n",
                       m_lastCommanded.targetVelocity,
                       m_lastCommanded.accelerationLimit);
       }
@@ -117,6 +129,10 @@ void ReactionWheel::service() {
     pollTimer = millis();
 
     // Get the current motor status
+    // if (kDebug) {
+    //   Serial.printf("[RW] [DEBUG] ReactionWheel::service() - Polling for status: CAN bus available flag: %s\r\n",
+    //                 m_canHardwareRef.available() ? "True" : "False");
+    // }
     if (m_moteus->Poll()) {
       m_lastMessageTime = millis();
       const Moteus::Query::Result v = m_moteus->last_result().values;
@@ -128,10 +144,10 @@ void ReactionWheel::service() {
   }
 
   // Backup hardware timing link dropout watchdog
-  if (millis() - m_lastMessageTime > Constants::TIMEOUT_MS) { 
-    m_status.rwMode = RWMode::kFault;
-    m_status.rwFault = RWFault::kCommunicationError;
-  }
+  // if (millis() - m_lastMessageTime > Constants::TIMEOUT_MS) { 
+  //   m_status.rwMode = RWMode::kFault;
+  //   m_status.rwFault = RWFault::kCommunicationError;
+  // }
 }
 
 void ReactionWheel::parseMoteusStatus(RWStatus& status, const Moteus::Query::Result& v) {

@@ -8,6 +8,8 @@
 #define AOCS_SPI_DEBUG false
 #define AOCS_ISOLATION_MODE false
 
+#define CAN_SILENT_MODE_PIN 21
+
 #if AOCS_ISOLATION_MODE
   #include "MockOBCConnection.h"
   MockOBCConnection obcConnection = MockOBCConnection();
@@ -19,7 +21,7 @@
 // CAN bus settings: 1 Mbps arbitration and 5 Mbps data rate for CAN-FD bus speed
 ACAN_T4FD_Settings canSettings(1000000, DataBitRateFactor::x5);
 // The reaction wheel controller
-ReactionWheel wheelController(ACAN_T4::can3, canSettings, 1); 
+ReactionWheel wheelController(CAN_SILENT_MODE_PIN, ACAN_T4::can3, canSettings, 1);
 
 // Current system telemetry
 AOCSControllerTelemetry currentTelemetry;
@@ -100,9 +102,10 @@ void setup() {
   
   if (wheelController.status().rwMode != ReactionWheel::RWMode::kRunning) {
     Serial.println("[main] [WARN] Reaction Wheel offline at startup validation check.");
-  } else {
-    Serial.println("[main] AOCS Control Startup Complete.");
   }
+  
+  Serial.println("[main] AOCS Control Startup Complete.");
+  
 }
 
 void serviceSubSystems() {
