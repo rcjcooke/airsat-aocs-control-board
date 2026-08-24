@@ -14,8 +14,8 @@
 // Pin assignments
 constexpr uint8_t CAN_SILENT_MODE_PIN = 21;
 // Thruster pin assignments -- per AOCS Hardware Control Board schematic
-// (TCTRL1-4 net labels): Thruster1=D1, Thruster2=D4, Thruster3=D28, Thruster4=D22
-constexpr uint8_t THRUSTER_PINS[ThrusterControl::kThrusterCount] = {1, 4, 28, 22};
+// (TCTRL1-4 net labels): Thruster1=D1, Thruster2=D4, Thruster3=D29, Thruster4=D22
+constexpr uint8_t THRUSTER_PINS[ThrusterControl::kThrusterCount] = {1, 4, 29, 22};
 
 #if AOCS_ISOLATION_MODE
   #include "MockOBCConnection.h"
