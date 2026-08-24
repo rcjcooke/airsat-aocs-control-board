@@ -68,7 +68,7 @@ void ReactionWheel::setTargetTorque(float requestedTorqueNm) {
   m_target.accelerationLimit = abs(targetAlphaRadSS * Constants::RAD_S_TO_HZ);
   m_target.targetVelocity = constrain(rawTargetVelocityHz, -Constants::MAX_MOTOR_SPEED_HZ, Constants::MAX_MOTOR_SPEED_HZ);
   if (kDebug) {
-    if (Serial.availableForWrite() > 0) {
+    if (Serial) {
       Serial.printf("[RW] [DEBUG] ReactionWheel::setTargetTorque() - Requested torque: %.4f Nm, target velocity: %.2f Hz, acceleration limit: %.2f Hz/s\r\n",
                     requestedTorqueNm,
                     m_target.targetVelocity,
@@ -127,11 +127,11 @@ void ReactionWheel::service() {
     m_moteus->BeginPosition(cmd, &kPositionFormat);
       
     if (kDebug) {
-      auto isEqualWithinTolerance = [](float a, float b, float tolerance) {
-        return fabs(a - b) <= tolerance;
-      };
+      if (Serial) {
+        auto isEqualWithinTolerance = [](float a, float b, float tolerance) {
+          return fabs(a - b) <= tolerance;
+        };
 
-      if (Serial.availableForWrite() > 0) {
         if (!isEqualWithinTolerance(m_target.targetVelocity, m_lastCommanded.targetVelocity, Constants::VELOCITY_TOLERANCE_MSS) || 
           !isEqualWithinTolerance(m_target.accelerationLimit, m_lastCommanded.accelerationLimit, Constants::ACCELERATION_TOLERANCE_MSS)) {
           // Check to see whether the latest target is different within the controllers precision

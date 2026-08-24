@@ -162,7 +162,7 @@ void refreshTelemetry() {
 }
 
 void printDiagnostics() {
-  if (Serial.availableForWrite() > 0) {
+  if (Serial) {
     Serial.printf("[main] [OBC] Link state: %s | Commands RX: %u | No-Ops RX: %u | RX errors: %u | Sync drops: %u\r\n",
                   obcConnection.isConnected() ? "Connected" : "DISCONNECTED",
                   obcConnection.commandCount(),
