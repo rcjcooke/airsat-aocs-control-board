@@ -25,9 +25,10 @@ struct CommandPayload {
 
 struct TelemetryPayload {
     float storedAngularMomentum; // kg.m^2/s
+    float rwAngularVelocity; // rad/s
     uint16_t propellant; // kg
     uint16_t error_count;
-    uint8_t padding[14];
+    uint8_t padding[10];
 }; // 22 bytes
 
 struct CommandPacket {

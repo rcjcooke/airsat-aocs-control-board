@@ -176,6 +176,8 @@ void refreshTelemetry() {
   currentTelemetry.wheelMode = static_cast<uint8_t>(wheelController.status().rwMode);
   currentTelemetry.wheelFault = static_cast<uint8_t>(wheelController.status().rwFault);
   currentTelemetry.wheelTargetAccelerationRADSS = wheelController.getTargetAngularAcceleration();
+  currentTelemetry.wheelAngularVelocityRADS = wheelController.getAngularVelocity();
+  
   // OBC Link stats
   currentTelemetry.obcSyncDropCount = obcConnection.syncDropCount();
   currentTelemetry.obcCommandsRXCount = obcConnection.commandCount();

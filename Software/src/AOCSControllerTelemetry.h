@@ -12,6 +12,7 @@ struct AOCSControllerTelemetry {
   uint8_t wheelFault = 0;
   float wheelStoredAngularMomentumKGM2S = 0.0f;
   float wheelTargetAccelerationRADSS = 0.0f;
+  float wheelAngularVelocityRADS = 0.0f;
 
   // OBC Connection State
   bool obcConnected = false;               // True if OBC link is active
@@ -19,7 +20,7 @@ struct AOCSControllerTelemetry {
   uint8_t obcSyncDropCount = 0;            // Count of sync drops
   uint8_t obcRxErrorCount = 0;             // Count of RX errors
   uint32_t obcTotalBytesReceived = 0;      // Total bytes received from OBC
-  uint8_t obcNoOpCount = 0;               // Count of No-Op frames received from OBC
+  uint8_t obcNoOpCount = 0;                // Count of No-Op frames received from OBC
 
   // Thrusters State
   float thrusters1ThrustN = 0.0f;
