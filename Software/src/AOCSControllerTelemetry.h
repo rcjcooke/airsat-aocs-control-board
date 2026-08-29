@@ -11,7 +11,6 @@ struct AOCSControllerTelemetry {
   uint8_t wheelMode = 0;
   uint8_t wheelFault = 0;
   float wheelStoredAngularMomentumKGM2S = 0.0f;
-  float wheelTargetAccelerationRADSS = 0.0f;
   float wheelAngularVelocityRADS = 0.0f;
 
   // OBC Connection State

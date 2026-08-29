@@ -66,23 +66,17 @@ public:
   float getAngularVelocity() const;
   float getAngularMomentum() const;
   float getTargetTorque() const;
-  float getTargetAngularAcceleration() const;
 
 private:
-  struct ControlParams {
-    float targetVelocity;
-    float accelerationLimit;
-  };
-
   inline static const Moteus::PositionMode::Format kPositionFormat = [] {
     Moteus::PositionMode::Format format;
     format.position = mjbots::moteus::Resolution::kFloat;
     format.velocity = mjbots::moteus::Resolution::kFloat;
     format.kp_scale = mjbots::moteus::Resolution::kFloat;
     format.kd_scale = mjbots::moteus::Resolution::kFloat;
+    format.ilimit_scale = mjbots::moteus::Resolution::kFloat;
+    format.feedforward_torque = mjbots::moteus::Resolution::kFloat;
     format.maximum_torque = mjbots::moteus::Resolution::kFloat;
-    format.velocity_limit = mjbots::moteus::Resolution::kFloat;
-    format.accel_limit = mjbots::moteus::Resolution::kFloat;
     return format;
   }();
 
@@ -97,9 +91,8 @@ private:
   uint8_t m_moteusID;
 
   // Control parameters
-  ControlParams m_target;
-  ControlParams m_lastCommanded;
   float m_targetTorqueNm;
+  float m_lastCommandedTorqueNm;
   bool m_noControlTimeManagement; // If true, commands are sent immediately on next update() call, bypassing the control period timer.
 
   // Status

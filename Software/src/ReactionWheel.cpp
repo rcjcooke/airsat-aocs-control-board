@@ -8,9 +8,8 @@ ReactionWheel::ReactionWheel(uint8_t silentModePin, ACAN_T4& canHardware, const 
     m_canHardwareRef(canHardware),
     m_canSettingsRef(settings),
     m_moteusID(moteusID),
-    m_target(), 
-    m_lastCommanded(), 
     m_targetTorqueNm(0.0f),
+    m_lastCommandedTorqueNm(0.0f), 
     m_noControlTimeManagement(false), 
     m_status(), 
     m_lastMessageTime(0) {}
@@ -58,21 +57,12 @@ void ReactionWheel::begin() {
 }
 
 void ReactionWheel::setTargetTorque(float requestedTorqueNm) {
-  m_targetTorqueNm = requestedTorqueNm;
-
-  float targetAlphaRadSS = requestedTorqueNm / Constants::WHEEL_INERTIA;
-  float rawTargetVelocityHz = (requestedTorqueNm >= 0.0f) 
-                              ? Constants::MAX_MOTOR_SPEED_HZ 
-                              : -Constants::MAX_MOTOR_SPEED_HZ;
-                              
-  m_target.accelerationLimit = abs(targetAlphaRadSS * Constants::RAD_S_TO_HZ);
-  m_target.targetVelocity = constrain(rawTargetVelocityHz, -Constants::MAX_MOTOR_SPEED_HZ, Constants::MAX_MOTOR_SPEED_HZ);
+  m_targetTorqueNm = constrain(requestedTorqueNm, -Constants::MAX_MOTOR_TORQUE_NM, Constants::MAX_MOTOR_TORQUE_NM);
   if (kDebug) {
     if (Serial) {
-      Serial.printf("[RW] [DEBUG] ReactionWheel::setTargetTorque() - Requested torque: %.4f Nm, target velocity: %.2f Hz, acceleration limit: %.2f Hz/s\r\n",
+      Serial.printf("[RW] [DEBUG] ReactionWheel::setTargetTorque() - Requested torque: %.4f Nm | Constrained torque: %.4f Nm\r\n",
                     requestedTorqueNm,
-                    m_target.targetVelocity,
-                    m_target.accelerationLimit);
+                    m_targetTorqueNm);
     }
   }
 }
@@ -83,10 +73,6 @@ float ReactionWheel::getAngularVelocity() const {
 
 float ReactionWheel::getAngularMomentum() const {
   return m_status.angularMomentumKGM2S;
-}
-
-float ReactionWheel::getTargetAngularAcceleration() const {
-  return m_target.accelerationLimit * Constants::HZ_TO_RAD_S;
 }
 
 float ReactionWheel::getTargetTorque() const {
@@ -109,19 +95,17 @@ void ReactionWheel::service() {
     sendTimer = millis();
 
     // Update the last commanded values
-    m_lastCommanded.targetVelocity = m_target.targetVelocity;
-    m_lastCommanded.accelerationLimit = m_target.accelerationLimit;
+    m_lastCommandedTorqueNm = m_targetTorqueNm;
 
     // Use the Moteus acceleration limit for AirSat torque control
     // Make sure physical constraints are imposed in case they haven't already been applied
     Moteus::PositionMode::Command cmd;
     cmd.position = std::numeric_limits<float>::quiet_NaN();
-    cmd.velocity = m_lastCommanded.targetVelocity;
-    cmd.velocity_limit = Constants::MAX_MOTOR_SPEED_HZ; 
-    cmd.accel_limit = constrain(m_lastCommanded.accelerationLimit, 0, Constants::MAX_MOTOR_ACCELERATION_HZ);
-    cmd.maximum_torque = Constants::MAX_MOTOR_TORQUE_NM;
-    cmd.kp_scale = 1.0;
-    cmd.kd_scale = 1.0;
+    cmd.velocity = 0.0;
+    cmd.kp_scale = 0.0;
+    cmd.kd_scale = 0.0;
+    cmd.ilimit_scale = 0.0;
+    cmd.feedforward_torque = m_lastCommandedTorqueNm;
 
     // Using Begin rather than Set to avoid blocking calls.
     m_moteus->BeginPosition(cmd, &kPositionFormat);
@@ -132,20 +116,17 @@ void ReactionWheel::service() {
           return fabs(a - b) <= tolerance;
         };
 
-        if (!isEqualWithinTolerance(m_target.targetVelocity, m_lastCommanded.targetVelocity, Constants::VELOCITY_TOLERANCE_MSS) || 
-          !isEqualWithinTolerance(m_target.accelerationLimit, m_lastCommanded.accelerationLimit, Constants::ACCELERATION_TOLERANCE_MSS)) {
+        if (!isEqualWithinTolerance(m_targetTorqueNm, m_lastCommandedTorqueNm, Constants::ACCELERATION_TOLERANCE_MSS)) {
           // Check to see whether the latest target is different within the controllers precision
-          Serial.printf("[RW] [DEBUG] ReactionWheel::service() - Sent new command: velocity = %.2f Hz, acceleration limit = %.2f Hz/s\r\n",
-                        m_lastCommanded.targetVelocity,
-                        m_lastCommanded.accelerationLimit);
+          Serial.printf("[RW] [DEBUG] ReactionWheel::service() - Sent new command: target torque = %.4f Nm\r\n",
+                        m_lastCommandedTorqueNm);
         }
         // Once a second, print the last command
         static uint32_t lastDebugTime = 0;
         if (millis() - lastDebugTime >= 1000) {
           lastDebugTime = millis();
-          Serial.printf("[RW] [DEBUG] ReactionWheel::service() - Last command: velocity = %.2f Hz, acceleration limit = %.2f Hz/s\r\n",
-                        m_lastCommanded.targetVelocity,
-                        m_lastCommanded.accelerationLimit);
+          Serial.printf("[RW] [DEBUG] ReactionWheel::service() - Last command: target torque = %.4f Nm\r\n",
+                        m_lastCommandedTorqueNm);
         }
       }
     }
@@ -156,18 +137,7 @@ void ReactionWheel::service() {
       const Moteus::Query::Result v = m_moteus->last_result().values;
       parseMoteusStatus(m_status, v);
     }
-    
-    // else {
-    //   m_status.rwMode = RWMode::kFault;
-    //   m_status.rwFault = RWFault::kCommunicationError;
-    // }
   }
-
-  // Backup hardware timing link dropout watchdog
-  // if (millis() - m_lastMessageTime > Constants::TIMEOUT_MS) { 
-  //   m_status.rwMode = RWMode::kFault;
-  //   m_status.rwFault = RWFault::kCommunicationError;
-  // }
 }
 
 void ReactionWheel::parseMoteusStatus(RWStatus& status, const Moteus::Query::Result& v) {

@@ -175,7 +175,6 @@ void refreshTelemetry() {
   currentTelemetry.wheelStoredAngularMomentumKGM2S = wheelController.getAngularMomentum();
   currentTelemetry.wheelMode = static_cast<uint8_t>(wheelController.status().rwMode);
   currentTelemetry.wheelFault = static_cast<uint8_t>(wheelController.status().rwFault);
-  currentTelemetry.wheelTargetAccelerationRADSS = wheelController.getTargetAngularAcceleration();
   currentTelemetry.wheelAngularVelocityRADS = wheelController.getAngularVelocity();
   
   // OBC Link stats
@@ -199,10 +198,9 @@ void printDiagnostics() {
                   obcConnection.noOpCount(),
                   obcConnection.rxErrorCount(), 
                   obcConnection.syncDropCount());
-    Serial.printf("[main] [RW ] Stored Momentum: %.3f Kg.m²/s | Target Torque: %.3f Nm | Target Acceleration: %.3f rad/s² | Mode: %s | Fault: %s\r\n",
+    Serial.printf("[main] [RW ] Stored Momentum: %.3f Kg.m²/s | Target Torque: %.3f Nm | Mode: %s | Fault: %s\r\n",
                   wheelController.getAngularMomentum(),
                   wheelController.getTargetTorque(),
-                  wheelController.getTargetAngularAcceleration(),
                   AirSat::reactionWheelModeToString(wheelController.status().rwMode).c_str(),
                   AirSat::reactionWheelFaultToString(wheelController.status().rwFault).c_str());
     Serial.printf("[main] [RW ] Moteus mode: %u | Moteus fault code: %u\r\n",
