@@ -105,6 +105,7 @@ void ReactionWheel::service() {
     cmd.kp_scale = 0.0;
     cmd.kd_scale = 0.0;
     cmd.ilimit_scale = 0.0;
+    cmd.maximum_torque = Constants::MAX_MOTOR_TORQUE_NM;
     cmd.feedforward_torque = m_lastCommandedTorqueNm;
 
     // Using Begin rather than Set to avoid blocking calls.
