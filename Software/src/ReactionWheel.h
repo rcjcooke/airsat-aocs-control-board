@@ -16,7 +16,7 @@ namespace Constants {
   constexpr float STATOR_INERTIA = 6.7464E-06f; // I (kg*m^2)
   constexpr float FLYWHEEL_INERTIA = 0.000215f; // I (kg*m^2)
   constexpr float WHEEL_INERTIA = STATOR_INERTIA + FLYWHEEL_INERTIA; // I (kg*m^2)
-  constexpr float MAX_MOTOR_TORQUE_NM = 1.7f; // Maximum torque (Nm)
+  constexpr float MAX_MOTOR_TORQUE_NM = 1.5f; // Maximum torque (Nm) - actually 1.7, but limited for safety
   constexpr float MAX_MOTOR_SPEED_HZ = 83.0f; // 4980 RPM (Measured limit - losses because of 22.2V supply, 330Kv motor, FOC control and electrical losses)
   constexpr float MAX_MOTOR_ACCELERATION_HZ = MAX_MOTOR_TORQUE_NM / WHEEL_INERTIA * RAD_S_TO_HZ; // Maximum acceleration (Hz/s)
   // Control constants
